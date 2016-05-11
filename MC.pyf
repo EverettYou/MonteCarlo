@@ -4,25 +4,46 @@
 python module MC ! in 
     interface  ! in :MC
         module core ! in :MC:MC.f90
+            use ieee_arithmetic
+            integer :: nsite
+            integer, allocatable,dimension(:) :: hist
+            real(kind=8), allocatable,dimension(:) :: klst
             integer :: dof
-            integer :: Nsite
-            integer :: NA
-            integer :: NB
-            integer :: NC
-            integer, allocatable,dimension(:) :: config
-            integer, allocatable,dimension(:,:) :: chi
             integer, allocatable,dimension(:) :: irng
+            integer :: na
+            integer, allocatable,dimension(:) :: config
+            real(kind=8) :: energy
+            integer, allocatable,dimension(:,:) :: chi
             integer, allocatable,dimension(:) :: jlst
-            real(8), allocatable,dimension(:) :: Klst
+            integer :: nb
+            integer :: nc
             subroutine init ! in :MC:MC.f90:core
             end subroutine init
-            subroutine MCstep ! in :MC:MC.f90:core
-            end subroutine MCstep
+            subroutine run(steps,mode) ! in :MC:MC.f90:core
+                integer intent(in) :: steps
+                integer intent(in) :: mode
+            end subroutine run
+            subroutine get_energy ! in :MC:MC.f90:core
+            end subroutine get_energy
+            subroutine get_hist ! in :MC:MC.f90:core
+            end subroutine get_hist
             subroutine dump ! in :MC:MC.f90:core
             end subroutine dump
             subroutine load ! in :MC:MC.f90:core
             end subroutine load
         end module core
+        module physics ! in :MC:MC.f90
+            use core
+            real(kind=8) :: energy1
+            real(kind=8) :: energy2
+            real(kind=8), allocatable,dimension(:) :: magn1
+            integer, allocatable,dimension(:) :: monitor
+            real(kind=8), allocatable,dimension(:,:) :: spins
+            real(kind=8), allocatable,dimension(:,:) :: magn2
+            subroutine measure(steps) ! in :MC:MC.f90:physics
+                integer intent(in) :: steps
+            end subroutine measure
+        end module physics
     end interface 
 end python module MC
 

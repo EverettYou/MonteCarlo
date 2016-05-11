@@ -135,5 +135,87 @@ class group(object):
 '''statistical mechanics model system
 Generic model:
 * onsite dof: g in range(model.dof)
-* Hamiltonian H = - sum_{ij} J_{ij} chi(g_i, g_j)
-    H is sparse and uses a row compressed storage scheme'''
+* Hamiltonian H = - sum_{ij} J_{ij} chi(g_i, g_j)'''
+import MC # FORTRAN extension: Monte Carlo kernel
+class model(object):
+    def __init__(self):
+        MC.core.init() # kernel initialization (allocation)
+    # return current configuration
+    # example: model.config(), model.config([0,1,2])
+    def config(self, ind=None):
+        if ind is None:
+            return MC.core.config-1
+        else:
+            return MC.core.config[ind]-1
+    # run MC for steps, under mode 0 or 1
+    def run(self, steps=1, mode=0):
+        if mode==0: # MC without update physical observibles
+            MC.core.run(steps, 0)
+        elif mode==1: # MC with physical observibles updated
+            MC.core.run(steps, 1)
+        else: # unrecognised mode
+            raise ValueError('The mode parameter of model.run only takes 0 or 1.')
+        return self
+    # return energy
+    def energy(self):
+        if numpy.isnan(MC.core.energy):
+            MC.core.get_energy()
+        return numpy.asscalar(MC.core.energy)
+    # return histogram of bulk spin states (boundary not counted)
+    def hist(self):
+        if MC.core.hist[0]<0:
+            MC.core.get_hist()
+        return MC.core.hist
+    # take measurement for steps, monitoring specified spins
+    def measure(self, steps=1, monitor=None):
+        if monitor is not None:
+            MC.physics.monitor = numpy.array(monitor)+1
+        MC.physics.measure(steps)
+        result = {'energy1': numpy.asscalar(MC.physics.energy1), # energy 1st moment
+                  'energy2': numpy.asscalar(MC.physics.energy2), # energy 2nd moment
+                  'magnet1': MC.physics.magn1, # bulk magnetization 1st moment
+                  'magnet2': MC.physics.magn2, # bulk magnetization 2nd moment 
+                  'spins':MC.physics.spins,'steps': steps} # monitored spin states
+        return result
+# inheritances:
+class hypertree_model(model):
+    def __init__(self, L=0, n=0, Ks=(1.,1.), branches=2):
+        # setup the lattice
+        latt = lattice(L, branches=branches)
+        self.latt = latt
+        # setup the permutation group
+        grp = group(n)
+        self.grp = grp
+        dof = grp.order
+        # passing data to FORTRAN MC core
+        MC.core.dof = dof
+        MC.core.nsite = latt.Nsite
+        MC.core.na, MC.core.nb, MC.core.nc = latt.NA, latt.NB, latt.NC
+        # initialize configuration
+        MC.core.config = numpy.array([1]*latt.Nsite)
+        # chi is adjusted by dof
+        MC.core.chi = numpy.array(grp.chi)-dof
+        # build Hamiltonian
+        H = []
+        for a in latt:
+            i = a.index # take site a index
+            bs = a.IR # get its IR sites
+            for b, K in zip(bs, Ks):
+                j = b.index # take site b index
+                H.append((i,j,K))
+                H.append((j,i,K))
+        ilst, jlst, Klst = tuple(zip(*sorted(H)))
+        MC.core.irng = self.make_irng(ilst)+1
+        MC.core.jlst = numpy.array(jlst)+1
+        MC.core.klst = numpy.array(Klst)
+        model.__init__(self)
+    # convert ilst to irng
+    def make_irng(self, ilst):
+        imax = 0
+        irng = [0]
+        for k, i in zip(range(len(ilst)),ilst):
+            while i > imax:
+                irng.append(k)
+                imax += 1
+        irng.append(k+1)
+        return numpy.array(irng)
