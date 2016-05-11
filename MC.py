@@ -7,43 +7,58 @@ class site(object):
     # site constructor given (d,x,f)
     def __init__(self, d, x, f):
         self.d = d # depth
-        self.x = x # real space coordinate
         self.f = f # feature space coordinate
+        self.x = x # real space coordinate
         self.UV = [] # UV sites
         self.IR = [] # IR sites
+        self.label = None
         self.index = None
     def __repr__(self):
-        return '<%d,%d,%d>'%(self.d,self.x,self.f)
+        return '<%d,%d,%d>'%(self.d,self.f,self.x)
     def sortkey(self):
-        return (self.d,self.f,self.x)
+        return (self.label,-self.d,self.f,self.x)
 '''lattice system'''
 class lattice(object):
     # lattice constructor given UV system size L
     def __init__(self, L, branches=2):
+        self.L = L # keep system size L
         self.branches = branches # set branches at each RG step
         # initial layer of sites
         layer0 = [site(0,x,0) for x in range(L)]
         self.ftop = dict() # initialize feature top register
         # build RG tree
-        self.sites = sorted(self.RGtree(layer0), key=operator.methodcaller('sortkey'))
-        # index every site and partition to even/odd sublattices
+        self.depth = 0
+        self.sites = self.RGtree(layer0)
         self.Nsite = len(self.sites)
-        # depth of the last site is the depth of the lattice
-        self.depth = self.sites[-1].d
-        self.sublattice = {'boundary':[], 'even':[], 'odd':[]}
+        # on return self.depth has been set to the depth of the tree
+        # label sites: A - A sublattice, B - B sublattice, C - boundary
+        self.NA, self.NB, self.NC = 0,0,0
+        for a in self.sites:
+            if a.d == 0: # the most UV layer is the boundary
+                a.label = 'C'
+                self.NC += 1
+            elif a.d%2 == self.depth%2:
+                # A sublattice must contain the most IR layer
+                a.label = 'A'
+                self.NA += 1
+            else: # B sublattice contains the rest
+                a.label = 'B'
+                self.NB += 1
+        # sort sites and make index
+        self.sites.sort(key = operator.methodcaller('sortkey'))
+        self.site = dict()
         for i, a in zip(range(self.Nsite), self.sites):
             a.index = i
-            if a.d == 0:
-                key = 'boundary'
-            elif a.d%2 == 0:
-                key = 'even'
-            else:
-                key = 'odd'
-            self.sublattice[key].append(a)
+            self.site[(a.d,a.f,a.x)] = a
+    def __iter__(self):
+        return iter(self.sites)
+    def __getitem__(self, key):
+        return self.site[key]
     # recursive build RG tree
     def RGtree(self, this_layer, d=1):
         # if this_layer has exausted
         if len(this_layer) <= 1:
+            self.depth = max(self.depth, d-1)
             return this_layer
         # get the top index of features in this depth
         try:
@@ -86,6 +101,8 @@ class group(object):
         self.order = len(self.elements) # group order
         self.index = {g:i for g, i in zip(self.elements, range(self.order))}
         self.build_chi() # build chi table
+    def __iter__(self):
+        return iter(self.elements)
     # group multiplication
     def multiply(self, g1, g2):
         return tuple(g1[i] for i in g2)
@@ -120,54 +137,3 @@ Generic model:
 * onsite dof: g in range(model.dof)
 * Hamiltonian H = - sum_{ij} J_{ij} chi(g_i, g_j)
     H is sparse and uses a row compressed storage scheme'''
-class model(object):
-    def __init__(self):
-        self.dof = 0 # onsite degrees of freedom
-        self.Nsite = 0 # number of sites
-        self.config = [] # configuration
-        self.chi = numpy.array([[0]]) # chi table, as numpy array
-        self.H = [[]] # Hamiltonian in row compressed storage
-        self.route = [] # update route
-        self.boundary = [] # boundary sites
-    # one step of MC update
-    def MCstep(self):
-        # each MC step goes over the update route once
-        for i in self.route:
-            h = sum(J*self.chi[self.config[j]] for j, J in self.H[i])
-            w = numpy.exp(h)
-            self.config[i] = numpy.random.choice(self.dof,p=w/sum(w))
-    # calculate energy of the system by config
-    def energy(self):
-        energy = 0
-        for i in range(self.Nsite):
-            chii = self.chi[self.config[i]]
-            energy -= sum(J*chii[self.config[j]] for j, J in self.H[i])
-        return energy
-class hypertree_model(model):
-    def __init__(self, L=0, dof=0, Js=(1.,1.), branches=2):
-        # setup the lattice
-        latt = lattice(L, branches=branches)
-        # setup the permutation group
-        G = group(dof)
-        # initialization
-        self.dof = dof
-        self.Nsite = latt.Nsite
-        self.config = [0]*latt.Nsite
-        # chi is adjusted by dof
-        self.chi = numpy.array(G.chi)-self.dof
-        # build Hamiltonian
-        self.H = [[] for i in range(latt.Nsite)]
-        for i in range(latt.Nsite):
-            a = latt.sites[i] # take site i
-            bs = a.IR # get its IR sites
-            for b, J in zip(bs, Js):
-                j = b.index
-                self.H[i].append((j,J))
-                self.H[j].append((i,J))
-        # assign update route (use the sublattice structure)
-        self.route = []
-        for key in ('odd','even'):
-            for a in latt.sublattice[key]:
-                self.route.append(a.index)
-        # assign boundary sites
-        self.boundary = [a.index for a in latt.sublattice['boundary']]

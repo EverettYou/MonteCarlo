@@ -1,0 +1,30 @@
+!    -*- f90 -*-
+! Note: the context of this file is case sensitive.
+
+python module MC ! in 
+    interface  ! in :MC
+        module core ! in :MC:MC.f90
+            integer :: dof
+            integer :: Nsite
+            integer :: NA
+            integer :: NB
+            integer :: NC
+            integer, allocatable,dimension(:) :: config
+            integer, allocatable,dimension(:,:) :: chi
+            integer, allocatable,dimension(:) :: irng
+            integer, allocatable,dimension(:) :: jlst
+            real(8), allocatable,dimension(:) :: Klst
+            subroutine init ! in :MC:MC.f90:core
+            end subroutine init
+            subroutine MCstep ! in :MC:MC.f90:core
+            end subroutine MCstep
+            subroutine dump ! in :MC:MC.f90:core
+            end subroutine dump
+            subroutine load ! in :MC:MC.f90:core
+            end subroutine load
+        end module core
+    end interface 
+end python module MC
+
+! This file was auto-generated with f2py (version:2).
+! See http://cens.ioc.ee/projects/f2py2e/

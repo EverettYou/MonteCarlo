@@ -1,4 +1,5 @@
 build
+backup
 dist
 _build
 *.json
