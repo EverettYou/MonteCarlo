@@ -5,18 +5,19 @@ python module MC ! in
     interface  ! in :MC
         module core ! in :MC:MC.f90
             use ieee_arithmetic
-            integer :: nsite
-            integer, allocatable,dimension(:) :: hist
-            real(kind=8), allocatable,dimension(:) :: klst
             integer :: dof
-            integer, allocatable,dimension(:) :: irng
+            integer :: nsite
             integer :: na
-            integer, allocatable,dimension(:) :: config
-            real(kind=8) :: energy
-            integer, allocatable,dimension(:,:) :: chi
-            integer, allocatable,dimension(:) :: jlst
             integer :: nb
             integer :: nc
+            integer :: nlst
+            integer, allocatable,dimension(:,:) :: chi
+            integer, allocatable,dimension(:) :: irng
+            integer, allocatable,dimension(:) :: jlst
+            real(kind=8), allocatable,dimension(:) :: klst
+            real(kind=8) :: energy
+            integer, allocatable,dimension(:) :: config
+            integer, allocatable,dimension(:) :: hist
             subroutine init ! in :MC:MC.f90:core
             end subroutine init
             subroutine run(steps,mode) ! in :MC:MC.f90:core
@@ -34,12 +35,13 @@ python module MC ! in
         end module core
         module physics ! in :MC:MC.f90
             use core
+            integer :: nspin
+            integer, allocatable,dimension(:) :: monitor
             real(kind=8) :: energy1
             real(kind=8) :: energy2
-            real(kind=8), allocatable,dimension(:) :: magn1
-            integer, allocatable,dimension(:) :: monitor
+            real(kind=8), allocatable,dimension(:) :: magnet1
+            real(kind=8), allocatable,dimension(:,:) :: magnet2
             real(kind=8), allocatable,dimension(:,:) :: spins
-            real(kind=8), allocatable,dimension(:,:) :: magn2
             subroutine measure(steps) ! in :MC:MC.f90:physics
                 integer intent(in) :: steps
             end subroutine measure

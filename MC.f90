@@ -11,17 +11,19 @@ MODULE CORE
     USE IEEE_ARITHMETIC
     IMPLICIT NONE
     ! data pool linked to python
-    INTEGER :: DOF ! onsite degrees of freedom
-    INTEGER :: NSITE ! number of sites
+    ! system variables
+    INTEGER :: DOF    ! onsite degrees of freedom
+    INTEGER :: NSITE  ! number of sites
     INTEGER :: NA, NB, NC ! number of sublattice sites
-    INTEGER, ALLOCATABLE :: CONFIG(:) ! configuration
+    INTEGER :: NLST   ! size of JLST and KLST
     INTEGER, ALLOCATABLE :: CHI(:,:)  ! chi table
     INTEGER, ALLOCATABLE :: IRNG(:)   ! adjacency range list
     INTEGER, ALLOCATABLE :: JLST(:)   ! adjacent site index list
     REAL(8), ALLOCATABLE :: KLST(:)   ! energy coefficient list
-    ! physical observables
+    ! state variables
     REAL(8) :: ENERGY ! energy
-    INTEGER, ALLOCATABLE :: HIST(:) ! histogram of spin (bin count)
+    INTEGER, ALLOCATABLE :: CONFIG(:) ! configuration    
+    INTEGER, ALLOCATABLE :: HIST(:)   ! histogram of spin (bin count)
     ! private workspace
     INTEGER :: NBLK ! number of bulk sites
     REAL(8), ALLOCATABLE :: BIAS(:,:)   ! local bias field
@@ -30,38 +32,25 @@ MODULE CORE
 CONTAINS
     ! initialization
     SUBROUTINE INIT()
-        ! allocate observables
-        IF (ALLOCATED(HIST)) THEN
-            IF (ANY(SHAPE(HIST) /= [DOF])) THEN
-                DEALLOCATE(HIST)
-                ALLOCATE(HIST(DOF))
-            END IF
-        ELSE
-            ALLOCATE(HIST(DOF))
-        END IF
-        HIST(1) = -1
-        ENERGY = IEEE_VALUE(1.D0, IEEE_QUIET_NAN)
         ! allocate workspace
-        ! BIAS and WEIGHT are of the shape [DOF, NSITE]
-        IF (ALLOCATED(BIAS)) THEN
-            IF (ANY(SHAPE(BIAS) /= [DOF, NSITE])) THEN
-                DEALLOCATE(BIAS)
-                ALLOCATE(BIAS(DOF,NSITE))
-            END IF
-        ELSE
-            ALLOCATE(BIAS(DOF,NSITE))
-        END IF
-        IF (ALLOCATED(WEIGHT)) THEN
-            IF (ANY(SHAPE(WEIGHT) /= [DOF, NSITE])) THEN
-                DEALLOCATE(WEIGHT)
-                ALLOCATE(WEIGHT(DOF,NSITE))
-            END IF
-        ELSE
-            ALLOCATE(WEIGHT(DOF,NSITE))
-        END IF
         ! bulk sites = A + B sites
         NBLK = NA + NB
-        ! RND will only use bulk sites
+        IF (ALLOCATED(BIAS)) THEN
+            IF (ANY(SHAPE(BIAS) /= [DOF, NBLK])) THEN
+                DEALLOCATE(BIAS)
+                ALLOCATE(BIAS(DOF, NBLK))
+            END IF
+        ELSE
+            ALLOCATE(BIAS(DOF, NBLK))
+        END IF
+        IF (ALLOCATED(WEIGHT)) THEN
+            IF (ANY(SHAPE(WEIGHT) /= [DOF, NBLK])) THEN
+                DEALLOCATE(WEIGHT)
+                ALLOCATE(WEIGHT(DOF, NBLK))
+            END IF
+        ELSE
+            ALLOCATE(WEIGHT(DOF, NBLK))
+        END IF
         IF (ALLOCATED(RND)) THEN
             IF (ANY(SHAPE(RND) /= [NBLK])) THEN
                 DEALLOCATE(RND)
@@ -196,41 +185,34 @@ CONTAINS
         END DO
     END SUBROUTINE GET_HIST
     ! core dump
-    SUBROUTINE DUMP()
-        INTEGER :: NLST
-        NLST = SIZE(JLST)
-        
+    SUBROUTINE DUMP()        
         PRINT *, "MC.core dump to MC.core.dat"
         OPEN (UNIT=99, FILE="MC.core.dat", STATUS="REPLACE", ACCESS="STREAM")
-        WRITE(99) DOF, NSITE, NA, NB, NC, NLST
-        WRITE(99) CONFIG, CHI, IRNG, JLST, KLST
-        WRITE(99) ENERGY, HIST
-        WRITE(99) NBLK
+        WRITE(99) DOF, NSITE, NA, NB, NC, NLST, NBLK
+        WRITE(99) CHI, IRNG, JLST, KLST
+        WRITE(99) ENERGY, CONFIG, HIST
         WRITE(99) BIAS, WEIGHT, RND
         CLOSE(99)
     END SUBROUTINE DUMP
     ! core load
-    SUBROUTINE LOAD()
-        INTEGER :: NLST
-        
+    SUBROUTINE LOAD() 
         PRINT *, "MC.core load from MC.core.dat"
         OPEN (UNIT=99, FILE="MC.core.dat", STATUS="UNKNOWN", ACCESS="STREAM")
-        READ(99) DOF, NSITE, NA, NB, NC, NLST
-        IF (ALLOCATED(CONFIG)) DEALLOCATE(CONFIG)
+        READ(99) DOF, NSITE, NA, NB, NC, NLST, NBLK
         IF (ALLOCATED(CHI)) DEALLOCATE(CHI)
         IF (ALLOCATED(IRNG)) DEALLOCATE(IRNG)
         IF (ALLOCATED(JLST)) DEALLOCATE(JLST)
         IF (ALLOCATED(KLST)) DEALLOCATE(KLST)
+        IF (ALLOCATED(CONFIG)) DEALLOCATE(CONFIG)
         IF (ALLOCATED(HIST)) DEALLOCATE(HIST)
-        ALLOCATE(CONFIG(NSITE), CHI(DOF,DOF), IRNG(NSITE+1), JLST(NLST), KLST(NLST))
-        READ(99) CONFIG, CHI, IRNG, JLST, KLST
-        ALLOCATE(HIST(DOF))
-        READ(99) ENERGY, HIST
-        READ(99) NBLK
         IF (ALLOCATED(BIAS)) DEALLOCATE(BIAS)
         IF (ALLOCATED(WEIGHT)) DEALLOCATE(WEIGHT)
         IF (ALLOCATED(RND)) DEALLOCATE(RND)
-        ALLOCATE(BIAS(DOF,NSITE), WEIGHT(DOF,NSITE), RND(NBLK))
+        ALLOCATE(CHI(DOF,DOF), IRNG(NSITE+1), JLST(NLST), KLST(NLST), &
+                 CONFIG(NSITE), HIST(DOF), &
+                 BIAS(DOF,NBLK), WEIGHT(DOF,NBLK), RND(NBLK))
+        READ(99) CHI, IRNG, JLST, KLST
+        READ(99) ENERGY, CONFIG, HIST
         READ(99) BIAS, WEIGHT, RND
         CLOSE(99)
     END SUBROUTINE LOAD
@@ -239,37 +221,32 @@ END MODULE CORE
 MODULE PHYSICS
     USE CORE
     IMPLICIT NONE
+    ! data variables
     INTEGER :: NSPIN ! number of spins to monitor
     INTEGER, ALLOCATABLE :: MONITOR(:) ! sites for monitoring
     REAL(8) :: ENERGY1, ENERGY2
-    REAL(8), ALLOCATABLE :: MAGN1(:), MAGN2(:,:) ! (DOF, DOF)
+    REAL(8), ALLOCATABLE :: MAGNET1(:), MAGNET2(:,:) ! (DOF, DOF)
     REAL(8), ALLOCATABLE :: SPINS(:,:) ! (DOF, NSPIN)
 CONTAINS
     ! launch measurement environment 
     SUBROUTINE LAUNCH()
-        ! get number of spins to monitor
-        IF (ALLOCATED(MONITOR)) THEN
-            NSPIN = SIZE(MONITOR)
-        ELSE
-            NSPIN = 0
-        END IF
         ! magnetization 1st moment (vector)
-        IF (ALLOCATED(MAGN1)) THEN
-            IF (ANY(SHAPE(MAGN1) /= [DOF])) THEN
-                DEALLOCATE(MAGN1)
-                ALLOCATE(MAGN1(DOF))
+        IF (ALLOCATED(MAGNET1)) THEN
+            IF (ANY(SHAPE(MAGNET1) /= [DOF])) THEN
+                DEALLOCATE(MAGNET1)
+                ALLOCATE(MAGNET1(DOF))
             END IF
         ELSE
-            ALLOCATE(MAGN1(DOF))
+            ALLOCATE(MAGNET1(DOF))
         END IF
         ! magnetization 2nd moment (matrix)
-        IF (ALLOCATED(MAGN2)) THEN
-            IF (ANY(SHAPE(MAGN2) /= [DOF, DOF])) THEN
-                DEALLOCATE(MAGN2)
-                ALLOCATE(MAGN2(DOF, DOF))
+        IF (ALLOCATED(MAGNET2)) THEN
+            IF (ANY(SHAPE(MAGNET2) /= [DOF, DOF])) THEN
+                DEALLOCATE(MAGNET2)
+                ALLOCATE(MAGNET2(DOF, DOF))
             END IF
         ELSE
-            ALLOCATE(MAGN2(DOF, DOF))
+            ALLOCATE(MAGNET2(DOF, DOF))
         END IF
         ! spin 1st moment (array of vectors)
         ! all higher order moments are the same as 1st moment
@@ -289,14 +266,14 @@ CONTAINS
     SUBROUTINE MEASURE(STEPS)
         INTEGER, INTENT(IN) :: STEPS
         INTEGER :: STEP, I, J
-        REAL(8) :: MAGN(DOF)
+        REAL(8) :: MAGNET(DOF)
         
         CALL LAUNCH() ! launch measurement environment
         ! clear data pool
         ENERGY1 = 0.D0
         ENERGY2 = 0.D0
-        MAGN1 = 0.D0
-        MAGN2 = 0.D0
+        MAGNET1 = 0.D0
+        MAGNET2 = 0.D0
         SPINS = 0.D0
         ! run MC with updates, and collect data
         DO STEP = 1, STEPS
@@ -307,10 +284,10 @@ CONTAINS
             ENERGY1 = ENERGY1 + ENERGY
             ENERGY2 = ENERGY2 + ENERGY**2
             ! magnetization measurement
-            MAGN = REAL(HIST,8)/NBLK
-            MAGN1 = MAGN1 + MAGN
+            MAGNET = REAL(HIST,8)/NBLK
+            MAGNET1 = MAGNET1 + MAGNET
             FORALL (I = 1:DOF, J = 1:DOF)
-                MAGN2(I, J) = MAGN2(I, J) + MAGN(I)*MAGN(J)
+                MAGNET2(I, J) = MAGNET2(I, J) + MAGNET(I)*MAGNET(J)
             END FORALL
             ! spin measurement
             FORALL (I = 1:NSPIN)
@@ -320,8 +297,8 @@ CONTAINS
         ! normalized by STEPS
         ENERGY1 = ENERGY1/STEPS
         ENERGY2 = ENERGY2/STEPS
-        MAGN1 = MAGN1/STEPS
-        MAGN2 = MAGN2/STEPS
+        MAGNET1 = MAGNET1/STEPS
+        MAGNET2 = MAGNET2/STEPS
         SPINS = SPINS/STEPS
     END SUBROUTINE MEASURE
 END MODULE PHYSICS
@@ -342,9 +319,10 @@ END MODULE PHYSICS
 ! SUBROUTINE TEST_MEASURE()
 !     USE PHYSICS
 !     CALL INIT_RAND_SEED()
-!     CALL MEASURE(10000)
+!     CALL MEASURE(10)
+!     PRINT *, NSPIN
 !     PRINT *, ENERGY1, ENERGY2
-!     PRINT *, MAGN1
+!     PRINT *, MAGNET1
 !     PRINT *, CONFIG
 ! END SUBROUTINE TEST_MEASURE
 ! 
@@ -353,6 +331,6 @@ END MODULE PHYSICS
 !     
 !     CALL LOAD()
 ! !     CALL TEST_RUN()
-!     CALL TEST_MEASURE()
+! !     CALL TEST_MEASURE()
 ! !     CALL TEST_CHOOSE()
 ! END PROGRAM MAIN
