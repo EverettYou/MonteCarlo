@@ -2,6 +2,52 @@ import itertools
 import operator
 import math
 import numpy
+''' ----- Permutation Group System ----- 
+attributes: n, elements, order, index, chi'''
+class Group(object):
+    # construct symmetric group S_n given n
+    def __init__(self, n):
+        self.n = n
+        self.elements = list(itertools.permutations(range(n)))
+        self.dof = len(self.elements) # group order
+        self.index = {g:i for g, i in zip(self.elements, range(self.dof))}
+        self.build_chi() # build chi table
+        # after building chi table, self.chi is constructed
+    def __repr__(self):
+        return repr(self.elements)
+    def __iter__(self):
+        return iter(self.elements)
+    # group multiplication
+    def multiply(self, g1, g2):
+        return tuple(g1[i] for i in g2)
+    # group inversion
+    def inverse(self, g):
+        return tuple(sorted(range(self.n), key=lambda k: g[k]))
+    # permutation character (number of cycles)
+    # the range: character =  1,2,...,n
+    def character(self, g):
+        # setup a set of objects
+        objs = set(range(self.n))
+        cycles = 0 # initially no cycles
+        while objs: # if objects not empty
+            obj = objs.pop() # pop out an object
+            obj = g[obj] # get its image object under g action
+            while obj in objs: # if obj is still in objs
+                objs.remove(obj) # remove obj
+                obj = g[obj] # and get the next image
+            # while loop terminates if a full cycles has been gone through
+            cycles += 1 # cycles +1
+        return cycles
+    # build chi table: chi(g1, g2) = ln Tr g1*g2^(-1)
+    def build_chi(self):
+        g1s = self.elements
+        # prepare the inversions
+        g2s = [self.inverse(g) for g in self.elements]
+        # prepare the characters adjusted by n, such that chi <= 0
+        # the reason to adjust by n is to avoid overflow of partition weight at low temperature
+        chis = [self.character(g)-self.n for g in self.elements]
+        # construct chi table
+        self.chi = [[chis[self.index[self.multiply(g1,g2)]] for g1 in g1s] for g2 in g2s]
 ''' ----- Lattice System ----- 
 attributes: nsite, na, nb, nc, sites, coordmap,
             (Hamiltonian related) irng, jlst, klst, nlst'''
@@ -158,52 +204,6 @@ class HypertreeLattice(Lattice):
         self.jlst = numpy.array(jlst)+1
         self.klst = numpy.array(klst)
         self.nlst = nlst
-''' ----- Permutation Group System ----- 
-attributes: n, elements, order, index, chi'''
-class Group(object):
-    # construct symmetric group S_n given n
-    def __init__(self, n):
-        self.n = n
-        self.elements = list(itertools.permutations(range(n)))
-        self.dof = len(self.elements) # group order
-        self.index = {g:i for g, i in zip(self.elements, range(self.dof))}
-        self.build_chi() # build chi table
-        # after building chi table, self.chi is constructed
-    def __repr__(self):
-        return repr(self.elements)
-    def __iter__(self):
-        return iter(self.elements)
-    # group multiplication
-    def multiply(self, g1, g2):
-        return tuple(g1[i] for i in g2)
-    # group inversion
-    def inverse(self, g):
-        return tuple(sorted(range(self.n), key=lambda k: g[k]))
-    # permutation character (number of cycles)
-    # the range: character =  1,2,...,n
-    def character(self, g):
-        # setup a set of objects
-        objs = set(range(self.n))
-        cycles = 0 # initially no cycles
-        while objs: # if objects not empty
-            obj = objs.pop() # pop out an object
-            obj = g[obj] # get its image object under g action
-            while obj in objs: # if obj is still in objs
-                objs.remove(obj) # remove obj
-                obj = g[obj] # and get the next image
-            # while loop terminates if a full cycles has been gone through
-            cycles += 1 # cycles +1
-        return cycles
-    # build chi table: chi(g1, g2) = ln Tr g1*g2^(-1)
-    def build_chi(self):
-        g1s = self.elements
-        # prepare the inversions
-        g2s = [self.inverse(g) for g in self.elements]
-        # prepare the characters adjusted by n, such that chi <= 0
-        # the reason to adjust by n is to avoid overflow of partition weight at low temperature
-        chis = [self.character(g)-self.n for g in self.elements]
-        # construct chi table
-        self.chi = [[chis[self.index[self.multiply(g1,g2)]] for g1 in g1s] for g2 in g2s]
 ''' ----- Model System -----
 attributes:
     system: dof, nsite, na, nb, nc, nlst, chi, irng, jlst, klst

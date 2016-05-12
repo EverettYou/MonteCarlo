@@ -132,10 +132,11 @@ CONTAINS
         INTEGER :: I
         ! calculate BIAS and WEIGHT
         FORALL (I = LB:UB)
-            BIAS(:,I) = MATMUL(CHI(:,CONFIG(JLST(IRNG(I):IRNG(I+1)-1))),&
-                        KLST(IRNG(I):IRNG(I+1)-1))
+            BIAS(:,I) = GET_BIAS(I) ! faster than MATMUL
             WEIGHT(:,I) = EXP(BIAS(:,I))
         END FORALL
+        ! note: calculate WEIGHT in FORALL has similar performance as
+        ! WEIGHT(:,LB:UB) = EXP(BIAS(:,LB:UB))
         ! in-place accumulate WEIGHT to CDF (unnormalized)
         DO I = 2, DOF
             WEIGHT(I, LB:UB) = WEIGHT(I, LB:UB) + WEIGHT(I-1, LB:UB)
@@ -143,6 +144,19 @@ CONTAINS
         ! multiply RND by the total weight
         RND(LB:UB) = RND(LB:UB) * WEIGHT(DOF, LB:UB)
     END SUBROUTINE SET_BLOCK
+    ! calculate bias field (as a vector of DOF components)
+    ! given the site index I
+    PURE FUNCTION GET_BIAS(I) RESULT (B)
+        INTEGER, INTENT(IN) :: I
+        REAL(8) :: B(DOF)
+        INTEGER :: J
+        B = 0.D0
+        DO J = IRNG(I), IRNG(I+1)-1
+            B = B + CHI(:,CONFIG(JLST(J)))*KLST(J)
+        END DO
+        ! this is several times faster then the MATMUL implementation
+        ! because on matrix is constructed before multiplication
+    END FUNCTION GET_BIAS
     ! random choice
     ! given CDF array W, and random number X
     ! return a choice in [1:DOF]
@@ -284,7 +298,9 @@ CONTAINS
             ENERGY1 = ENERGY1 + ENERGY
             ENERGY2 = ENERGY2 + ENERGY**2
             ! magnetization measurement
-            MAGNET = REAL(HIST,8)/NBLK
+            FORALL (I = 1:DOF)
+                MAGNET(I) = REAL(HIST(I),8)/NBLK
+            END FORALL
             MAGNET1 = MAGNET1 + MAGNET
             FORALL (I = 1:DOF, J = 1:DOF)
                 MAGNET2(I, J) = MAGNET2(I, J) + MAGNET(I)*MAGNET(J)
