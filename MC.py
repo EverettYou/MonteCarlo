@@ -319,7 +319,7 @@ class LatticeModel(Model):
         self.lattice = lattice
         self.group = group
         # construct system parameters
-        para = {**lattice.__dict__,**group.__dict__}
+        para = {key:val for key,val in itertools.chain(lattice.__dict__.items(),group.__dict__.items())}
         system = {name:para[name] for name in Model.system_parameters}
         # call Model method to initialize
         Model.__init__(self, system)

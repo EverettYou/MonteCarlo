@@ -130,23 +130,16 @@ CONTAINS
     SUBROUTINE SET_BLOCK(LB, UB)
         INTEGER, INTENT(IN) :: LB, UB
         INTEGER :: I
-        ! calculate BIAS and WEIGHT
+        ! set BIAS, WEIGHT block, and renormalize RND
         FORALL (I = LB:UB)
-            BIAS(:,I) = GET_BIAS(I) ! faster than MATMUL
-            WEIGHT(:,I) = EXP(BIAS(:,I))
+            BIAS(:,I) = SET_BIAS(I) ! faster than MATMUL
+            WEIGHT(:,I) = SET_WEIGHT(BIAS(:,I)) ! combined
+            RND(I) = RND(I) * WEIGHT(DOF, I)            
         END FORALL
-        ! note: calculate WEIGHT in FORALL has similar performance as
-        ! WEIGHT(:,LB:UB) = EXP(BIAS(:,LB:UB))
-        ! in-place accumulate WEIGHT to CDF (unnormalized)
-        DO I = 2, DOF
-            WEIGHT(I, LB:UB) = WEIGHT(I, LB:UB) + WEIGHT(I-1, LB:UB)
-        END DO
-        ! multiply RND by the total weight
-        RND(LB:UB) = RND(LB:UB) * WEIGHT(DOF, LB:UB)
     END SUBROUTINE SET_BLOCK
     ! calculate bias field (as a vector of DOF components)
     ! given the site index I
-    PURE FUNCTION GET_BIAS(I) RESULT (B)
+    PURE FUNCTION SET_BIAS(I) RESULT (B)
         INTEGER, INTENT(IN) :: I
         REAL(8) :: B(DOF)
         INTEGER :: J
@@ -156,7 +149,19 @@ CONTAINS
         END DO
         ! this is several times faster then the MATMUL implementation
         ! because on matrix is constructed before multiplication
-    END FUNCTION GET_BIAS
+    END FUNCTION SET_BIAS
+    ! calculate accumulated weight
+    ! given the site index I
+    PURE FUNCTION SET_WEIGHT(B) RESULT (W)
+        REAL(8), INTENT(IN) :: B(DOF)
+        REAL(8) :: W(DOF)
+        INTEGER :: K
+        W(1) = EXP(B(1))
+        ! directly accumulate CDF, not constructing PDF first
+        DO K = 2, DOF
+            W(K) = W(K-1) + EXP(B(K))
+        END DO
+    END FUNCTION SET_WEIGHT
     ! random choice
     ! given CDF array W, and random number X
     ! return a choice in [1:DOF]
