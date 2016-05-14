@@ -3,7 +3,7 @@
 !    f2py MC.f90 -m MC -h MC.pyf --overwrite-signature
 ! 2. remove private variables and procedures in MC.pyf
 ! 3. build extension by:
-!    f2py -c MC.pyf MC.f90 --build-dir build
+!    f2py -c MC.pyf MC.f90 --opt='-O3' --build-dir build
 ! +-----------------------------------+
 ! |   Fortran core for Monte Carlo    |
 ! +-----------------------------------+

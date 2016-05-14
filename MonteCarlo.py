@@ -10,7 +10,7 @@ class Group(object):
         self.n = n
         self.elements = list(itertools.permutations(range(n)))
         self.dof = len(self.elements) # group order
-        self.index = {g:i for g, i in zip(self.elements, range(self.dof))}
+        self.index = {g:i for i,g in enumerate(self.elements)}
         self.build_chi() # build chi table
         # after building chi table, self.chi is constructed
     def __repr__(self):
@@ -54,13 +54,58 @@ attributes: nsite, na, nb, nc, sites, coordmap,
 class Lattice(object):
     # initialize an empty lattice
     def __init__(self):
-        self.empty()
-        self.build_Hamiltonian()
-    def empty(self):
-        self.nsite = 0 # number of lattice sites
-        self.na, self.nb, self.nc = 0,0,0 # sublattice sites partition
-        self.sites = [] # lattice sites (container)
+        # get lattice sites (container)
+        self.sites = self.get_sites()
+        # --- counting sites ---
+        self.nsite = len(self.sites) # put the number of sites
+        # make sublattice partition, and count sublattice sites
+        self.na, self.nb, self.nc = 0,0,0
+        for site in self.sites:
+            label = site.get_label(self)
+            # label sites: A - A sublattice, B - B sublattice, C - boundary
+            if label == 'A':
+                self.na += 1
+            elif label == 'B':
+                self.nb += 1
+            elif label == 'C':
+                self.nc += 1
+        assert(self.na+self.nb+self.nc == self.nsite),'nsite=%d is not equal to the toal of na,nb,nc=%d,%d,%d.'%(self.nsite,self.na,self.nb,self.nc)
+        # --- sorting and indexing ---
+        # sort by site.sortkey (Site object must provide sortkey method)
+        self.sites.sort(key = operator.methodcaller('sortkey'))
+        # index the sites and setup coordinate map
         self.coordmap = {} # coordinate map: coordinate tuple => site object
+        for index, site in enumerate(self.sites):
+            site.index = index
+            self.coordmap[site.coordinate] = site
+        # --- build Hamiltonian ---
+        # get Hamiltonian terms
+        H = self.Hamiltonian()
+        if H: # if not null
+            ilst, jlst, klst = tuple(zip(*sorted(H)))
+        else: # for null Hamiltonian
+            ilst, jlst, klst = [], [], []
+        # length of the list, by zip construction all lists are of equal len
+        nlst = len(ilst)
+        # now ilst, jlst, klst separately hold the sequence of (i,j,K) for all terms
+        # ilst has been sorted in assending order, convert it to irng
+        imax = 0
+        irng = [0]
+        p = -1
+        for p, i in enumerate(ilst):
+            while i > imax:
+                irng.append(p)
+                imax += 1
+        # pad irng by p+1 until len(irng) = nsite+1
+        irng.extend([p+1]*(self.nsite-imax))
+        # set irng,jlst,klst,nlst as numpy arrays
+        # which will be passed to FORTRAN MC module in the Model class
+        self.irng = numpy.array(irng)+1
+        self.jlst = numpy.array(jlst)+1
+        self.klst = numpy.array(klst)
+        self.nlst = nlst
+        # Note: +1 is needed to convert irng and jlst to FORTRAN index
+        #       missing +1 will lead to bus error in the runtime
     def __repr__(self):
         return repr(self.sites)
     # for site in Lattice will iterate over all sites
@@ -69,69 +114,69 @@ class Lattice(object):
     # Lattice(coord) will return the site specified by the coordinate tuple
     def __getitem__(self, coord):
         return self.coordmap[coord]
-    # build_Hamiltonian returns the tuple (irng, jlst, klst, nlst) as numpy array
-    # which will be passed to FORTRAN MC extension core in the Model class
-    # From these data, Hamiltonian is constructed as (in a row compressed fassion)
-    #     slice(i) := irng[i]:irng[i+1]-1
-    #     H = - sum_i [chi(g(i),g(j)) for j in jlst[slice(i)]] dot klst[slice(i)]
-    #     nlst specifies the length of jlst and klst
-    # Here we provide a phantom version for null Hamiltonian
-    # Note: the inheritant class must redefine the build_Hamiltonian method!
-    def build_Hamiltonian(self):
-        self.irng = numpy.array([1]*(self.nsite+1))
-        self.jlst = numpy.array([],dtype=numpy.int_)
-        self.klst = numpy.array([],dtype=numpy.float_)
-        self.nlst = 0
+    # Note: the inheritant class must redefine the get_sites and build_Hamiltonian method!
+    # build an empty lattice
+    def get_sites(self):
+        return []
+    # return an empty Hamiltonian
+    def Hamiltonian(self):
+        return []
 # Inheritant class: HypertreeLattice
 class HypertreeLattice(Lattice):
     # Site class specific to HypertreeLattice
     class Site(object):
-        # site constructor given (d,x,f)
-        def __init__(self, d, x, f):
+        # site constructor given coord=(d,f,x)
+        def __init__(self, d,f,x):
             self.d = d # depth
             self.f = f # feature space coordinate
             self.x = x # real space coordinate
+            self.coordinate = (d,f,x) # coordinate tuple
             self.UV = [] # UV sites
             self.IR = [] # IR sites
             self.label = None
             self.index = None
         def __repr__(self):
-            return '<%d,%d,%d>'%(self.d,self.f,self.x)
+            if self.index is None:
+                return '<%d,%d,%d>'%(self.d,self.f,self.x)
+            else:
+                return '%d:<%d,%d,%d>'%(self.index,self.d,self.f,self.x)
+        def get_label(self, lattice):
+            if self.d == 0: # the ultimate UV layer -> boundary
+                self.label = 'C'
+            elif self.d%2 == lattice.depth%2: # A sublattice must contain the ultimate IR layer
+                self.label = 'A'
+            else: # B sublattice contains the rest
+                self.label = 'B'
+            return self.label
         def sortkey(self):
             return (self.label,-self.d,self.f,self.x)
-    # lattice constructor given UV system size L
+    # lattice constructor
     def __init__(self, L=0, Ks=[], branches=2):
-        Lattice.empty(self) # setup an empty lattice
-        self.L = L # keep system size L
-        self.branches = branches # set branches at each RG step
-        # UV layer of sites
-        layer0 = [self.Site(0,x,0) for x in range(L)]
-        self.ftop = {} # initialize feature top register
+        # broadcast parameters
+        self.L = L
+        self.Ks = Ks
+        self.branches = branches
+        # call Lattice to initialize
+        super().__init__()
+    # build hypertree lattice
+    def get_sites(self):
         # build hypertree
+        self.ftop = {} # initialize feature top register
         self.depth = 0
-        self.sites = self.hypertree(layer0)
-        self.nsite = len(self.sites)
-        # on return self.depth has been set to the depth of the tree
-        # label sites: A - A sublattice, B - B sublattice, C - boundary
+        # on return, self.depth will be set to the depth of the tree
+        return self.hypertree([self.Site(0,0,x) for x in range(self.L)])
+    # build Hamiltonian
+    def Hamiltonian(self):
+        H = [] # container for Hamiltonian terms
+        # each Hamiltonian term is a tuple (i,j,K)
         for site in self.sites:
-            if site.d == 0: # the ultimate UV layer is the boundary
-                site.label = 'C'
-                self.nc += 1
-            elif site.d%2 == self.depth%2:
-                # A sublattice must contain the ultimate IR layer
-                site.label = 'A'
-                self.na += 1
-            else: # B sublattice contains the rest
-                site.label = 'B'
-                self.nb += 1
-        # sort sites and setup coordinate mapping
-        self.sites.sort(key = operator.methodcaller('sortkey'))
-        for index, site in zip(range(self.nsite), self.sites):
-            site.index = index
-            self.coordmap[(site.d,site.f,site.x)] = site
-        # build Hamiltonian, after building,
-        # self.irng,.jlst,.klst,.nlst will be set
-        self.build_Hamiltonian(Ks)
+            i = site.index # take site index
+            IRsites = site.IR # get its IR sites
+            for IRsite, K in zip(IRsites, self.Ks):
+                j = IRsite.index # take IR site index
+                H.append((i,j,K))
+                H.append((j,i,K))
+        return H
     # recursive build hypertree
     def hypertree(self, this_layer, d=1):
         # if this_layer has exausted
@@ -153,8 +198,7 @@ class HypertreeLattice(Lattice):
             # partition UV sites into UV groups
             grp_UV = [site for site in group if site is not None]
             # construct IR sites of the same size as UV in the group
-            grp_IR = [self.Site(d,x,f+f1) for f1 in range(len(grp_UV))]
-            #print('%d,%d,%d'%(d,x,f),grp_UV,grp_IR)
+            grp_IR = [self.Site(d,f+f1,x) for f1 in range(len(grp_UV))]
             # link UV and IR sites
             for site_UV, site_IR in itertools.product(grp_UV, grp_IR):
                 site_UV.IR.append(site_IR)
@@ -170,40 +214,55 @@ class HypertreeLattice(Lattice):
             layer = [site for site in layer_raw if site is not None]
             sites.extend(self.hypertree(layer, d+1))
         return sites
+# Inheritant class: SquareLattice
+class SquareLattice(Lattice):
+    # Site class specific to SquareLattice
+    class Site(object):
+        # site constructor given (x, y)
+        def __init__(self, x, y):
+            self.x = x
+            self.y = y
+            self.coordinate = (x,y)
+            self.neighbors = []
+            self.label = None
+            self.index = None
+        def __repr__(self):
+            if self.index is None:
+                return '<%d,%d>'%(self.x,self.y)
+            else:
+                return '%d<%d,%d>'%(self.index,self.x,self.y)
+        def get_label(self, lattice):
+            if (self.x + self.y)%2: # odd lattice
+                self.label = 'B'
+            else: # even lattice
+                self.label = 'A'
+            return self.label
+        def sortkey(self):
+            return (self.label,self.x,self.y)
+    # lattice constructor
+    def __init__(self, L=0, Ks=[]):
+        # broadcast parameters
+        self.L = L
+        self.Ks = Ks
+        # call Lattice to initialize
+        super().__init__()
+    # build square lattice
+    def get_sites(self):
+        return [self.Site(x,y) for x in range(self.L) for y in range(self.L)]
     # build Hamiltonian
-    def build_Hamiltonian(self, Ks):
-        # energy parameters are passed in from Ks (as list or array)
+    def Hamiltonian(self):
         H = [] # container for Hamiltonian terms
         # each Hamiltonian term is a tuple (i,j,K)
         for site in self.sites:
             i = site.index # take site index
-            IRsites = site.IR # get its IR sites
-            for IRsite, K in zip(IRsites, Ks):
-                j = IRsite.index # take IR site index
-                H.append((i,j,K))
-                H.append((j,i,K))
-        if H:
-            ilst, jlst, klst = tuple(zip(*sorted(H)))
-        else:
-            ilst, jlst, klst = [], [], []
-        nlst = len(ilst)
-        # now ilst, jlst, klst separately hold (i,j,K) for all terms
-        # ilst has been sorted in assending order, convert to irng
-        imax = 0
-        irng = [0]
-        p = -1
-        for p, i in zip(range(nlst),ilst):
-            while i > imax:
-                irng.append(p)
-                imax += 1
-        irng.extend([p+1]*(self.nsite-imax))
-        # return tuple (irng, jlst, klst)
-        # Note: +1 is needed to convert irng and jlst to FORTRAN index
-        #       missing +1 will lead to bus error in the runtime
-        self.irng = numpy.array(irng)+1
-        self.jlst = numpy.array(jlst)+1
-        self.klst = numpy.array(klst)
-        self.nlst = nlst
+            # for the 1st nnn
+            site.neighbors.append([self[((site.x+dx)%self.L, (site.y+dy)%self.L)]
+                                   for (dx,dy) in ((-1,0),(0,-1),(0,1),(1,0))])
+            for jsites, K in zip(site.neighbors,self.Ks):
+                for jsite in jsites:
+                    j = jsite.index # take IR site index
+                    H.append((i,j,self.Ks[0]))
+        return H
 ''' ----- Model System -----
 attributes:
     system: dof, nsite, na, nb, nc, nlst, chi, irng, jlst, klst
@@ -221,6 +280,8 @@ class Model(object):
     # system must be a dict containing keys specified in Model._system_parameters
     def __init__(self, system, state={}, data={}):
         # passing system parameters to MC.core
+        if not all(key in system for key in Model.system_parameters):
+            raise ValueError('The dictionary %s passed in as system does not contains all the keys required in %s.'%(repr(system), repr(Model.system_parameters)))
         self.system = system
         # kernel initialization
         MC.core.init() # private workspace allocated
@@ -319,7 +380,7 @@ class LatticeModel(Model):
         self.lattice = lattice
         self.group = group
         # construct system parameters
-        para = {key:val for key,val in itertools.chain(lattice.__dict__.items(),group.__dict__.items())}
+        para = {**vars(lattice),**vars(group)}
         system = {name:para[name] for name in Model.system_parameters}
         # call Model method to initialize
-        Model.__init__(self, system)
+        super().__init__(system)
