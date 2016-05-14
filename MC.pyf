@@ -20,6 +20,9 @@ python module MC ! in
             integer, allocatable,dimension(:) :: hist
             subroutine init ! in :MC:MC.f90:core
             end subroutine init
+            subroutine seed(s) ! in :MC:MC.f90:core
+            	integer intent(in) :: s
+            end subroutine seed
             subroutine run(steps,mode) ! in :MC:MC.f90:core
                 integer intent(in) :: steps
                 integer intent(in) :: mode

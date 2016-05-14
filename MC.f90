@@ -62,17 +62,28 @@ CONTAINS
         ! random seed
         CALL INIT_RAND_SEED()
     END SUBROUTINE INIT
-    ! random seed
+    ! automatic random seed
     SUBROUTINE INIT_RAND_SEED()
         INTEGER :: I, N, CLOCK
-        INTEGER, DIMENSION(:), ALLOCATABLE :: SEED
+        INTEGER, DIMENSION(:), ALLOCATABLE :: SD
         CALL RANDOM_SEED(SIZE = N)
-        ALLOCATE(SEED(N))
+        ALLOCATE(SD(N))
         CALL SYSTEM_CLOCK(COUNT = CLOCK)
-        SEED = CLOCK + 37*[(I-1,I=1,N)]
-        CALL RANDOM_SEED(PUT = SEED)
-        DEALLOCATE(SEED)
+        SD = CLOCK + 37*[(I-1,I=1,N)]
+        CALL RANDOM_SEED(PUT = SD)
+        DEALLOCATE(SD)
     END SUBROUTINE INIT_RAND_SEED
+    ! manually set random seed
+    SUBROUTINE SEED(S)
+        INTEGER, INTENT(IN) :: S
+        INTEGER :: I, N
+        INTEGER, DIMENSION(:), ALLOCATABLE :: SD
+        CALL RANDOM_SEED(SIZE = N)
+        ALLOCATE(SD(N))
+        SD = S + 37*[(I-1,I=1,N)]
+        CALL RANDOM_SEED(PUT = SD)
+        DEALLOCATE(SD)
+    END SUBROUTINE SEED
     ! k steps of MC update (each update runs over all sites)
     ! MODE = 0: update without physical observables
     ! MODE = 1: update with physical observables
@@ -193,6 +204,8 @@ CONTAINS
                      CONFIG(JLST(IRNG(I):IRNG(I+1)-1))), &
                      KLST(IRNG(I):IRNG(I+1)-1))
         END DO
+        ! each bond is doubled counted, so 1/2
+        ENERGY = ENERGY/2
     END SUBROUTINE GET_ENERGY 
     ! collect total spin (histogram)
     SUBROUTINE GET_HIST()
@@ -325,33 +338,35 @@ CONTAINS
 END MODULE PHYSICS
 
 ! ========== for debug use ==========
-! SUBROUTINE TEST_CHOOSE()
-!     USE CORE
-!     INTEGER :: L
-!     DOF = 6
-!     L = CHOOSE([2._8,3._8,7._8,15._8,20._8,23._8],22.99_8)
-!     PRINT *, L
-! END SUBROUTINE TEST_CHOOSE
-! SUBROUTINE TEST_RUN()
-!     USE CORE
-!     CALL RUN(1,1)
-!     PRINT *, ENERGY
-! END SUBROUTINE TEST_RUN
-! SUBROUTINE TEST_MEASURE()
-!     USE PHYSICS
-!     CALL INIT_RAND_SEED()
-!     CALL MEASURE(10)
-!     PRINT *, NSPIN
-!     PRINT *, ENERGY1, ENERGY2
-!     PRINT *, MAGNET1
-!     PRINT *, CONFIG
-! END SUBROUTINE TEST_MEASURE
-! 
-! PROGRAM MAIN
-!     USE CORE
-!     
-!     CALL LOAD()
-! !     CALL TEST_RUN()
-! !     CALL TEST_MEASURE()
-! !     CALL TEST_CHOOSE()
-! END PROGRAM MAIN
+SUBROUTINE TEST_CHOOSE()
+    USE CORE
+    INTEGER :: L
+    DOF = 6
+    L = CHOOSE([2._8,3._8,7._8,15._8,20._8,23._8],22.99_8)
+    PRINT *, L
+END SUBROUTINE TEST_CHOOSE
+SUBROUTINE TEST_RUN()
+    USE CORE
+    !CALL RUN(1,1)
+    PRINT *, CONFIG
+    CALL GET_ENERGY()
+    PRINT *, ENERGY
+END SUBROUTINE TEST_RUN
+SUBROUTINE TEST_MEASURE()
+    USE PHYSICS
+    CALL INIT_RAND_SEED()
+    CALL MEASURE(100)
+    PRINT *, NSPIN
+    PRINT *, ENERGY1, ENERGY2
+    PRINT *, MAGNET1
+    PRINT *, CONFIG
+END SUBROUTINE TEST_MEASURE
+
+PROGRAM MAIN
+    USE CORE
+    
+    CALL LOAD()
+    CALL TEST_RUN()
+!     CALL TEST_MEASURE()
+!     CALL TEST_CHOOSE()
+END PROGRAM MAIN

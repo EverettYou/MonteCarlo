@@ -255,13 +255,12 @@ class SquareLattice(Lattice):
         # each Hamiltonian term is a tuple (i,j,K)
         for site in self.sites:
             i = site.index # take site index
-            # for the 1st nnn
+            # collect neighbors
             site.neighbors.append([self[((site.x+dx)%self.L, (site.y+dy)%self.L)]
                                    for (dx,dy) in ((-1,0),(0,-1),(0,1),(1,0))])
+            # add adjencent terms to Hamiltonian
             for jsites, K in zip(site.neighbors,self.Ks):
-                for jsite in jsites:
-                    j = jsite.index # take IR site index
-                    H.append((i,j,self.Ks[0]))
+                H.extend([(i,jst.index,K) for jst in jsites])
         return H
 ''' ----- Model System -----
 attributes:
