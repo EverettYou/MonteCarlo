@@ -19,16 +19,18 @@ MODULE CORE
     INTEGER, ALLOCATABLE :: CHI(:,:)  ! chi table
     INTEGER, ALLOCATABLE :: IRNG(:)   ! adjacency range list
     INTEGER, ALLOCATABLE :: JLST(:)   ! adjacent site index list
-    REAL(8), ALLOCATABLE :: KLST(:)   ! energy coefficient list
+    REAL,    ALLOCATABLE :: KLST(:)   ! action coefficient list
     ! state variables
-    REAL(8) :: ENERGY ! energy
+    REAL :: ACTION ! action
+    REAL :: BETA   ! inverse temperature
     INTEGER, ALLOCATABLE :: CONFIG(:) ! configuration    
     INTEGER, ALLOCATABLE :: HIST(:)   ! histogram of spin (bin count)
     ! private workspace
     INTEGER :: NBLK ! number of bulk sites
-    REAL(8), ALLOCATABLE :: BIAS(:,:)   ! local bias field
-    REAL(8), ALLOCATABLE :: WEIGHT(:,:) ! local weights
-    REAL(8), ALLOCATABLE :: RND(:)      ! random numbers
+    REAL, ALLOCATABLE :: BIAS(:,:)   ! local bias field
+    REAL, ALLOCATABLE :: WEIGHT(:,:) ! local weights
+    REAL, ALLOCATABLE :: RND(:)      ! random numbers
+    REAL, ALLOCATABLE :: KLST1(:)    ! an initial copy KLST for tempering
 CONTAINS
     ! initialization
     SUBROUTINE INIT()
@@ -61,6 +63,10 @@ CONTAINS
         END IF
         ! random seed
         CALL INIT_RAND_SEED()
+        ! make an initial copy of KLST
+        IF (NLST > 0) THEN
+            KLST1 = KLST
+        END IF
     END SUBROUTINE INIT
     ! automatic random seed
     SUBROUTINE INIT_RAND_SEED()
@@ -97,11 +103,11 @@ CONTAINS
                 CALL SAMPLE0(1, NA)
                 CALL SAMPLE0(NA+1, NA+NB)
             END DO
-            ! set energy = NaN indicates: energy is not up to date
-            ENERGY = IEEE_VALUE(1.D0, IEEE_QUIET_NAN)
+            ! set action = NaN indicates: action is not up to date
+            ACTION = IEEE_VALUE(1., IEEE_QUIET_NAN)
             HIST(1) = -1 ! set HIST(1)=-1 indicates: HIST is not up to date
         CASE(1)
-            IF (IEEE_IS_NAN(ENERGY)) CALL GET_ENERGY()
+            IF (IEEE_IS_NAN(ACTION)) CALL GET_ACTION()
             IF (HIST(1) < 0) CALL GET_HIST()
             DO STEP = 1, STEPS
                 CALL RANDOM_NUMBER(RND) ! prepare RND
@@ -132,7 +138,7 @@ CONTAINS
             G0 = CONFIG(I)
             G1 = CHOOSE(WEIGHT(:, I),RND(I))
             CONFIG(I) = G1
-            ENERGY = ENERGY + BIAS(G0, I) - BIAS(G1, I)
+            ACTION = ACTION + BIAS(G0, I) - BIAS(G1, I)
             HIST(G0) = HIST(G0) - 1
             HIST(G1) = HIST(G1) + 1
         END DO
@@ -152,9 +158,9 @@ CONTAINS
     ! given the site index I
     PURE FUNCTION SET_BIAS(I) RESULT (B)
         INTEGER, INTENT(IN) :: I
-        REAL(8) :: B(DOF)
+        REAL :: B(DOF)
         INTEGER :: J
-        B = 0.D0
+        B = 0.
         DO J = IRNG(I), IRNG(I+1)-1
             B = B + CHI(:,CONFIG(JLST(J)))*KLST(J)
         END DO
@@ -164,8 +170,8 @@ CONTAINS
     ! calculate accumulated weight
     ! given the site index I
     PURE FUNCTION SET_WEIGHT(B) RESULT (W)
-        REAL(8), INTENT(IN) :: B(DOF)
-        REAL(8) :: W(DOF)
+        REAL, INTENT(IN) :: B(DOF)
+        REAL :: W(DOF)
         INTEGER :: K
         W(1) = EXP(B(1))
         ! directly accumulate CDF, not constructing PDF first
@@ -177,8 +183,8 @@ CONTAINS
     ! given CDF array W, and random number X
     ! return a choice in [1:DOF]
     PURE FUNCTION CHOOSE(W, X) RESULT (R)
-        REAL(8), INTENT(IN) :: W(DOF) ! weight array
-        REAL(8), INTENT(IN) :: X ! a random number
+        REAL, INTENT(IN) :: W(DOF) ! weight array
+        REAL, INTENT(IN) :: X ! a random number
         INTEGER :: L, R, M
         ! binary search
         L = 0
@@ -195,23 +201,34 @@ CONTAINS
         ! now X is determined in the bin (L,R=L+1)
         ! L will be the result of the choice
     END FUNCTION CHOOSE
-    ! calculate energy
-    SUBROUTINE GET_ENERGY()
+    ! set beta and update action coefficients
+    SUBROUTINE SET_BETA(NEW_BETA)
+        REAL, INTENT(IN) :: NEW_BETA 
+        BETA = NEW_BETA ! set new beta
+        ! update action coefficients
+        IF (NLST > 0) THEN
+            KLST = KLST1 * BETA ! from the initial copy
+        END IF
+        ! it is better to update from an initial copy
+        ! to avoid error accumulation after several updates
+    END SUBROUTINE SET_BETA
+    ! calculate action
+    SUBROUTINE GET_ACTION()
         INTEGER :: I
-        ENERGY = 0.D0
-        DO I = 1, NSITE
-            ENERGY = ENERGY - DOT_PRODUCT(CHI(CONFIG(I), &
+        ACTION = 0.
+        DO I = 1, NSITE ! for all sites
+            ACTION = ACTION - DOT_PRODUCT(CHI(CONFIG(I), &
                      CONFIG(JLST(IRNG(I):IRNG(I+1)-1))), &
                      KLST(IRNG(I):IRNG(I+1)-1))
         END DO
         ! each bond is doubled counted, so 1/2
-        ENERGY = ENERGY/2
-    END SUBROUTINE GET_ENERGY 
+        ACTION = ACTION/2
+    END SUBROUTINE GET_ACTION 
     ! collect total spin (histogram)
     SUBROUTINE GET_HIST()
         INTEGER :: I, G
         HIST = 0
-        DO I = 1, NBLK
+        DO I = 1, NBLK ! for bulk sites only
             G = CONFIG(I)
             HIST(G) = HIST(G) + 1
         END DO
@@ -222,7 +239,7 @@ CONTAINS
         OPEN (UNIT=99, FILE="MC.core.dat", STATUS="REPLACE", ACCESS="STREAM")
         WRITE(99) DOF, NSITE, NA, NB, NC, NLST, NBLK
         WRITE(99) CHI, IRNG, JLST, KLST
-        WRITE(99) ENERGY, CONFIG, HIST
+        WRITE(99) ACTION, BETA, CONFIG, HIST
         WRITE(99) BIAS, WEIGHT, RND
         CLOSE(99)
     END SUBROUTINE DUMP
@@ -244,24 +261,29 @@ CONTAINS
                  CONFIG(NSITE), HIST(DOF), &
                  BIAS(DOF,NBLK), WEIGHT(DOF,NBLK), RND(NBLK))
         READ(99) CHI, IRNG, JLST, KLST
-        READ(99) ENERGY, CONFIG, HIST
+        READ(99) ACTION, BETA, CONFIG, HIST
         READ(99) BIAS, WEIGHT, RND
         CLOSE(99)
     END SUBROUTINE LOAD
 END MODULE CORE
 ! Measurement module
-MODULE PHYSICS
+MODULE DATA
     USE CORE
     IMPLICIT NONE
     ! data variables
     INTEGER :: NSPIN ! number of spins to monitor
     INTEGER, ALLOCATABLE :: MONITOR(:) ! sites for monitoring
-    REAL(8) :: ENERGY1, ENERGY2
-    REAL(8), ALLOCATABLE :: MAGNET1(:), MAGNET2(:,:) ! (DOF, DOF)
-    REAL(8), ALLOCATABLE :: SPINS(:,:) ! (DOF, NSPIN)
+    REAL :: ENERGY1, ENERGY2
+    REAL, ALLOCATABLE :: MAGNET1(:), MAGNET2(:,:) ! (DOF, DOF)
+    REAL, ALLOCATABLE :: SPINS(:,:) ! (DOF, NSPIN)
 CONTAINS
-    ! launch measurement environment 
-    SUBROUTINE LAUNCH()
+    ! measure energy and spin data over steps
+    SUBROUTINE MEASURE(STEPS)
+        INTEGER, INTENT(IN) :: STEPS
+        INTEGER :: STEP, I, J
+        REAL :: ENERGY, MAGNET(DOF)
+        
+        ! launch measurement environment
         ! magnetization 1st moment (vector)
         IF (ALLOCATED(MAGNET1)) THEN
             IF (ANY(SHAPE(MAGNET1) /= [DOF])) THEN
@@ -293,31 +315,24 @@ CONTAINS
         ! get energy and hist ready
         IF (IEEE_IS_NAN(ENERGY)) CALL GET_ENERGY()
         IF (HIST(1) < 0) CALL GET_HIST()
-    END SUBROUTINE LAUNCH
-    ! measure energy and spin data over steps
-    SUBROUTINE MEASURE(STEPS)
-        INTEGER, INTENT(IN) :: STEPS
-        INTEGER :: STEP, I, J
-        REAL(8) :: MAGNET(DOF)
-        
-        CALL LAUNCH() ! launch measurement environment
         ! clear data pool
-        ENERGY1 = 0.D0
-        ENERGY2 = 0.D0
-        MAGNET1 = 0.D0
-        MAGNET2 = 0.D0
-        SPINS = 0.D0
+        ENERGY1 = 0.
+        ENERGY2 = 0.
+        MAGNET1 = 0.
+        MAGNET2 = 0.
+        SPINS = 0.
         ! run MC with updates, and collect data
         DO STEP = 1, STEPS
             CALL RANDOM_NUMBER(RND) ! prepare RND
             CALL SAMPLE1(1, NA)
             CALL SAMPLE1(NA+1, NA+NB)
             ! energy measurement
+            ENERGY = ACTION/BETA/NSITE
             ENERGY1 = ENERGY1 + ENERGY
             ENERGY2 = ENERGY2 + ENERGY**2
             ! magnetization measurement
             FORALL (I = 1:DOF)
-                MAGNET(I) = REAL(HIST(I),8)/NBLK
+                MAGNET(I) = REAL(HIST(I))/NBLK
             END FORALL
             MAGNET1 = MAGNET1 + MAGNET
             FORALL (I = 1:DOF, J = 1:DOF)
@@ -325,7 +340,7 @@ CONTAINS
             END FORALL
             ! spin measurement
             FORALL (I = 1:NSPIN)
-                SPINS(CONFIG(MONITOR(I)), I) = SPINS(CONFIG(MONITOR(I)), I) + 1.D0
+                SPINS(CONFIG(MONITOR(I)), I) = SPINS(CONFIG(MONITOR(I)), I) + 1.
             END FORALL
         END DO
         ! normalized by STEPS
@@ -335,38 +350,38 @@ CONTAINS
         MAGNET2 = MAGNET2/STEPS
         SPINS = SPINS/STEPS
     END SUBROUTINE MEASURE
-END MODULE PHYSICS
+END MODULE DATA
 
 ! ========== for debug use ==========
-SUBROUTINE TEST_CHOOSE()
-    USE CORE
-    INTEGER :: L
-    DOF = 6
-    L = CHOOSE([2._8,3._8,7._8,15._8,20._8,23._8],22.99_8)
-    PRINT *, L
-END SUBROUTINE TEST_CHOOSE
-SUBROUTINE TEST_RUN()
-    USE CORE
-    !CALL RUN(1,1)
-    PRINT *, CONFIG
-    CALL GET_ENERGY()
-    PRINT *, ENERGY
-END SUBROUTINE TEST_RUN
-SUBROUTINE TEST_MEASURE()
-    USE PHYSICS
-    CALL INIT_RAND_SEED()
-    CALL MEASURE(100)
-    PRINT *, NSPIN
-    PRINT *, ENERGY1, ENERGY2
-    PRINT *, MAGNET1
-    PRINT *, CONFIG
-END SUBROUTINE TEST_MEASURE
-
-PROGRAM MAIN
-    USE CORE
-    
-    CALL LOAD()
-    CALL TEST_RUN()
-!     CALL TEST_MEASURE()
-!     CALL TEST_CHOOSE()
-END PROGRAM MAIN
+! SUBROUTINE TEST_CHOOSE()
+!     USE CORE
+!     INTEGER :: L
+!     DOF = 6
+!     L = CHOOSE([2.,3.,7.,15.,20.,23.],22.99)
+!     PRINT *, L
+! END SUBROUTINE TEST_CHOOSE
+! SUBROUTINE TEST_RUN()
+!     USE CORE
+!     !CALL RUN(1,1)
+!     PRINT *, CONFIG
+!     CALL GET_ENERGY()
+!     PRINT *, ENERGY
+! END SUBROUTINE TEST_RUN
+! SUBROUTINE TEST_MEASURE()
+!     USE DATA
+!     CALL INIT_RAND_SEED()
+!     CALL MEASURE(100)
+!     PRINT *, NSPIN
+!     PRINT *, ENERGY1, ENERGY2
+!     PRINT *, MAGNET1
+!     PRINT *, CONFIG
+! END SUBROUTINE TEST_MEASURE
+! 
+! PROGRAM MAIN
+!     USE CORE
+!     
+!     CALL LOAD()
+!     CALL TEST_RUN()
+! !     CALL TEST_MEASURE()
+! !     CALL TEST_CHOOSE()
+! END PROGRAM MAIN

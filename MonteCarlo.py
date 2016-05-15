@@ -14,7 +14,7 @@ class Group(object):
         self.build_chi() # build chi table
         # after building chi table, self.chi is constructed
     def __repr__(self):
-        return repr(self.elements)
+        return '<%s.Group S_%d (%d)>'%(__name__,self.n,self.dof)
     def __iter__(self):
         return iter(self.elements)
     # group multiplication
@@ -50,7 +50,7 @@ class Group(object):
         self.chi = [[chis[self.index[self.multiply(g1,g2)]] for g1 in g1s] for g2 in g2s]
 ''' ----- Lattice System ----- 
 attributes: nsite, na, nb, nc, sites, coordmap,
-            (Hamiltonian related) irng, jlst, klst, nlst'''
+            (Action related) irng, jlst, klst, nlst'''
 class Lattice(object):
     # initialize an empty lattice
     def __init__(self):
@@ -78,12 +78,12 @@ class Lattice(object):
         for index, site in enumerate(self.sites):
             site.index = index
             self.coordmap[site.coordinate] = site
-        # --- build Hamiltonian ---
-        # get Hamiltonian terms
-        H = self.Hamiltonian()
-        if H: # if not null
-            ilst, jlst, klst = tuple(zip(*sorted(H)))
-        else: # for null Hamiltonian
+        # --- build Action ---
+        # get Action terms
+        S = self.Action()
+        if S: # if not null
+            ilst, jlst, klst = tuple(zip(*sorted(S)))
+        else: # for null Action
             ilst, jlst, klst = [], [], []
         # length of the list, by zip construction all lists are of equal len
         nlst = len(ilst)
@@ -107,19 +107,19 @@ class Lattice(object):
         # Note: +1 is needed to convert irng and jlst to FORTRAN index
         #       missing +1 will lead to bus error in the runtime
     def __repr__(self):
-        return repr(self.sites)
+        return '<%s.Lattice %d:[%d|%d|%d]>'%(__name__,self.nsite,self.na,self.nb,self.nc)
     # for site in Lattice will iterate over all sites
     def __iter__(self):
         return iter(self.sites)
     # Lattice(coord) will return the site specified by the coordinate tuple
     def __getitem__(self, coord):
         return self.coordmap[coord]
-    # Note: the inheritant class must redefine the get_sites and build_Hamiltonian method!
+    # Note: the inheritant class must redefine the get_sites and build_Action method!
     # build an empty lattice
     def get_sites(self):
         return []
-    # return an empty Hamiltonian
-    def Hamiltonian(self):
+    # return an empty Action
+    def Action(self):
         return []
 # Inheritant class: HypertreeLattice
 class HypertreeLattice(Lattice):
@@ -165,18 +165,18 @@ class HypertreeLattice(Lattice):
         self.depth = 0
         # on return, self.depth will be set to the depth of the tree
         return self.hypertree([self.Site(0,0,x) for x in range(self.L)])
-    # build Hamiltonian
-    def Hamiltonian(self):
-        H = [] # container for Hamiltonian terms
-        # each Hamiltonian term is a tuple (i,j,K)
+    # build Action
+    def Action(self):
+        S = [] # container for Action terms
+        # each Action term is a tuple (i,j,K)
         for site in self.sites:
             i = site.index # take site index
             IRsites = site.IR # get its IR sites
             for IRsite, K in zip(IRsites, self.Ks):
                 j = IRsite.index # take IR site index
-                H.append((i,j,K))
-                H.append((j,i,K))
-        return H
+                S.append((i,j,K))
+                S.append((j,i,K))
+        return S
     # recursive build hypertree
     def hypertree(self, this_layer, d=1):
         # if this_layer has exausted
@@ -242,6 +242,8 @@ class SquareLattice(Lattice):
     # lattice constructor
     def __init__(self, L=0, Ks=[]):
         # broadcast parameters
+        if L%2 != 0:
+            raise ValueError('L must be even to ensure that the lattice bipartite.')
         self.L = L
         self.Ks = Ks
         # call Lattice to initialize
@@ -249,28 +251,29 @@ class SquareLattice(Lattice):
     # build square lattice
     def get_sites(self):
         return [self.Site(x,y) for x in range(self.L) for y in range(self.L)]
-    # build Hamiltonian
-    def Hamiltonian(self):
-        H = [] # container for Hamiltonian terms
-        # each Hamiltonian term is a tuple (i,j,K)
+    # build Action
+    def Action(self):
+        S = [] # container for Action terms
+        # each Action term is a tuple (i,j,K)
         for site in self.sites:
             i = site.index # take site index
             # collect neighbors
             site.neighbors.append([self[((site.x+dx)%self.L, (site.y+dy)%self.L)]
                                    for (dx,dy) in ((-1,0),(0,-1),(0,1),(1,0))])
-            # add adjencent terms to Hamiltonian
+            # add adjencent terms to Action
             for jsites, K in zip(site.neighbors,self.Ks):
-                H.extend([(i,jst.index,K) for jst in jsites])
-        return H
+                S.extend([(i,jst.index,K) for jst in jsites])
+        return S
 ''' ----- Model System -----
 attributes:
     system: dof, nsite, na, nb, nc, nlst, chi, irng, jlst, klst
-    state: energy, config, hist
+    state: action, beta, config, hist
     data: nspin, monitor, energy1, energy2, magnet1, magnet2, spins
+          nser, eser, mser
 methods: run(), measure()
 Generic statistical mechanics model:
 * onsite dof: g in range(model.dof)
-* Hamiltonian H = - sum_{ij} K_{ij} chi(g(i), g(j))'''
+* Action S = - sum_{ij} K_{ij} chi(g(i), g(j))'''
 import MC # FORTRAN extension: Monte Carlo kernel
 class Model(object):
     # specify system parameters
@@ -286,7 +289,7 @@ class Model(object):
         MC.core.init() # private workspace allocated
         # initialize state parameters
         if state == {}:
-            self.state = {'config':'FM','energy':'unknown','hist':'unknown'}
+            self.state = {'action':'unknown','beta':'default','config':'FM','hist':'unknown'}
         else:
             self.state = state
         self.data = data
@@ -296,18 +299,20 @@ class Model(object):
                 return None
             else:
                 return MC.core.config-1 # shift back to python index convesion
-        elif attrname == 'energy':
-            if numpy.isnan(MC.core.energy):
-                MC.core.get_energy()
-            return numpy.asscalar(MC.core.energy)
+        elif attrname == 'action':
+            if numpy.isnan(MC.core.action):
+                MC.core.get_action()
+            return numpy.asscalar(MC.core.action)
         elif attrname == 'hist':
             if MC.core.hist[0] < 0:
                 MC.core.get_hist()
             return MC.core.hist
+        elif attrname == 'beta':
+            return numpy.asscalar(MC.core.beta)
         elif attrname in Model.system_parameters:
             return getattr(MC.core, attrname)
         elif attrname == 'state':
-            return {key:getattr(self,key) for key in ('config','energy','hist')}
+            return {key:getattr(self,key) for key in ('action','beta','config','hist')}
         elif attrname == 'system':
             return {key:getattr(self,key) for key in Model.system_parameters}
         else:
@@ -324,17 +329,22 @@ class Model(object):
                 MC.core.config = numpy.random.randint(self.dof, size=self.nsite)+1
             else:
                 raise ValueError('Illigal value %s for config.'%repr(attrval))
-        elif attrname == 'energy':
+        elif attrname == 'action':
             if attrval in {'unknown', 'nan'}:
-                MC.core.energy = numpy.nan
+                MC.core.action = numpy.nan
             else:
-                MC.core.energy = attrval
+                MC.core.action = attrval
         elif attrname == 'hist':
             if attrval in {'unknown'}:
                 MC.core.hist = numpy.empty(self.dof)
                 MC.core.hist[0] = -1
             else:
                 MC.core.hist = attrval
+        elif attrname == 'beta':
+            if attrval in {'default'}:
+                MC.core.beta = 1. # to initialize
+            else:
+                MC.core.set_beta(attrval)
         elif attrname in Model.system_parameters:
             setattr(MC.core, attrname, attrval)
         elif attrname in {'state', 'system'}:
@@ -354,21 +364,21 @@ class Model(object):
     # take measurement for steps, monitoring specified spins
     def measure(self, steps=1, monitor=None):
         if monitor is None:
-            MC.physics.nspin = 0
-            MC.physics.monitor = numpy.array([],dtype=numpy.int_)
+            MC.data.nspin = 0
+            MC.data.monitor = numpy.array([],dtype=numpy.int_)
         else:
             if all(0<= i < self.lattice.nsite for i in monitor):
-                MC.physics.nspin = len(monitor)
-                MC.physics.monitor = numpy.array(monitor)+1
+                MC.data.nspin = len(monitor)
+                MC.data.monitor = numpy.array(monitor)+1
             else:
                 raise ValueError('The monitor %s of Model.measure out of lattice range.'%repr(monitor))
-        MC.physics.measure(steps)
+        MC.data.measure(steps)
         self.data = {
-            'energy1': numpy.asscalar(MC.physics.energy1), # energy 1st moment
-            'energy2': numpy.asscalar(MC.physics.energy2), # energy 2nd moment
-            'magnet1': MC.physics.magnet1, # bulk magnetization 1st moment
-            'magnet2': MC.physics.magnet2, # bulk magnetization 2nd moment 
-            'spins':MC.physics.spins,'steps': steps # monitored spin states
+            'energy1': numpy.asscalar(MC.data.energy1), # energy 1st moment
+            'energy2': numpy.asscalar(MC.data.energy2), # energy 2nd moment
+            'magnet1': MC.data.magnet1, # bulk magnetization 1st moment
+            'magnet2': MC.data.magnet2, # bulk magnetization 2nd moment 
+            'spins':MC.data.spins,'steps': steps # monitored spin states
         }
         return self.data
 # Inheritant class: LatticeModel - construct model from Lattice and Group

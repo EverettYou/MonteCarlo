@@ -11,24 +11,28 @@ python module MC ! in
             integer :: nb
             integer :: nc
             integer :: nlst
-            integer, allocatable,dimension(:,:) :: chi
-            integer, allocatable,dimension(:) :: irng
-            integer, allocatable,dimension(:) :: jlst
-            real(kind=8), allocatable,dimension(:) :: klst
-            real(kind=8) :: energy
-            integer, allocatable,dimension(:) :: config
-            integer, allocatable,dimension(:) :: hist
+            integer, allocatable, dimension(:,:) :: chi
+            integer, allocatable, dimension(:) :: irng
+            integer, allocatable, dimension(:) :: jlst
+            real, allocatable, dimension(:) :: klst
+            real :: action
+            real :: beta
+            integer, allocatable, dimension(:) :: config
+            integer, allocatable, dimension(:) :: hist
             subroutine init ! in :MC:MC.f90:core
             end subroutine init
             subroutine seed(s) ! in :MC:MC.f90:core
-            	integer intent(in) :: s
+            	integer, intent(in) :: s
             end subroutine seed
             subroutine run(steps,mode) ! in :MC:MC.f90:core
-                integer intent(in) :: steps
-                integer intent(in) :: mode
+                integer, intent(in) :: steps
+                integer, intent(in) :: mode
             end subroutine run
-            subroutine get_energy ! in :MC:MC.f90:core
-            end subroutine get_energy
+            subroutine set_beta(new_beta) ! in :MC:MC.f90:core
+            	real, intent(in) :: new_beta
+            end subroutine set_beta
+            subroutine get_action ! in :MC:MC.f90:core
+            end subroutine get_action
             subroutine get_hist ! in :MC:MC.f90:core
             end subroutine get_hist
             subroutine dump ! in :MC:MC.f90:core
@@ -36,19 +40,19 @@ python module MC ! in
             subroutine load ! in :MC:MC.f90:core
             end subroutine load
         end module core
-        module physics ! in :MC:MC.f90
+        module data ! in :MC:MC.f90
             use core
             integer :: nspin
             integer, allocatable,dimension(:) :: monitor
-            real(kind=8) :: energy1
-            real(kind=8) :: energy2
-            real(kind=8), allocatable,dimension(:) :: magnet1
-            real(kind=8), allocatable,dimension(:,:) :: magnet2
-            real(kind=8), allocatable,dimension(:,:) :: spins
-            subroutine measure(steps) ! in :MC:MC.f90:physics
+            real :: energy1
+            real :: energy2
+            real, allocatable,dimension(:) :: magnet1
+            real, allocatable,dimension(:,:) :: magnet2
+            real, allocatable,dimension(:,:) :: spins
+            subroutine measure(steps) ! in :MC:MC.f90:data
                 integer intent(in) :: steps
             end subroutine measure
-        end module physics
+        end module data
     end interface 
 end python module MC
 
