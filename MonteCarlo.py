@@ -2,6 +2,7 @@ import itertools
 import operator
 import math
 import numpy
+import warnings
 ''' ----- Permutation Group System ----- 
 attributes: n, elements, order, index, chi'''
 class Group(object):
@@ -280,7 +281,7 @@ class Model(object):
     system_parameters = ('dof','nsite','na','nb','nc','nlst','chi','irng','jlst','klst')
     # Model constructor given system parameter
     # system must be a dict containing keys specified in Model._system_parameters
-    def __init__(self, system, state={}, data={}):
+    def __init__(self, system, state={}):
         # passing system parameters to MC.core
         if not all(key in system for key in Model.system_parameters):
             raise ValueError('The dictionary %s passed in as system does not contains all the keys required in %s.'%(repr(system), repr(Model.system_parameters)))
@@ -292,7 +293,8 @@ class Model(object):
             self.state = {'action':'unknown','beta':'default','config':'FM','hist':'unknown'}
         else:
             self.state = state
-        self.data = data
+        # initialize database
+        self.clear()
     def __getattr__(self, attrname):
         if attrname == 'config':
             if MC.core.config is None:
@@ -318,11 +320,11 @@ class Model(object):
             if isinstance(attrval, numpy.ndarray):
                 MC.core.config = attrval+1 # shift to FORTRAN index convension
             elif isinstance(attrval, (list, tuple)):
-                MC.core.config = numpy.array(attrval)+1 # shift to FORTRAN index convension
+                MC.core.config = numpy.array(attrval,dtype='int32')+1 # shift to FORTRAN index convension
             elif attrval in {'FM','uniform'}:
-                MC.core.config = numpy.full(self.nsite,1,dtype=numpy.int_)
+                MC.core.config = numpy.full(self.nsite,1,dtype='int32')
             elif attrval in {'PM','random'}:
-                MC.core.config = numpy.random.randint(self.dof, size=self.nsite)+1
+                MC.core.config = numpy.random.randint(self.dof,size=self.nsite,dtype='int32')+1
             else:
                 raise ValueError('Illigal value %s for config.'%repr(attrval))
         elif attrname == 'action':
@@ -332,7 +334,7 @@ class Model(object):
                 MC.core.action = attrval
         elif attrname == 'hist':
             if attrval in {'unknown'}:
-                MC.core.hist = numpy.empty(self.dof)
+                MC.core.hist = numpy.empty(self.dof,dtype='int32')
                 MC.core.get_hist()
             else:
                 MC.core.hist = attrval
@@ -354,30 +356,49 @@ class Model(object):
                 setattr(self, key, attrval[key])
         else:
             self.__dict__[attrname] = attrval
-    # run MC for steps, under mode 0 or 1
+    # run MC for steps
     def run(self, steps=1):
         MC.core.run(steps)
         return self
-    # take measurement for steps, monitoring specified spins
-    def measure(self, steps=1, monitor=None):
-        if monitor is None:
-            MC.data.nspin = 0
-            MC.data.monitor = numpy.array([],dtype=numpy.int_)
-        else:
-            if all(0<= i < self.lattice.nsite for i in monitor):
-                MC.data.nspin = len(monitor)
-                MC.data.monitor = numpy.array(monitor)+1
-            else:
-                raise ValueError('The monitor %s of Model.measure out of lattice range.'%repr(monitor))
-        MC.data.measure(steps)
-        self.data = {
-            'energy1': numpy.asscalar(MC.data.energy1), # energy 1st moment
-            'energy2': numpy.asscalar(MC.data.energy2), # energy 2nd moment
-            'magnet1': MC.data.magnet1, # bulk magnetization 1st moment
-            'magnet2': MC.data.magnet2, # bulk magnetization 2nd moment 
-            'spins':MC.data.spins,'steps': steps # monitored spin states
-        }
-        return self.data
+    # clear data
+    def clear(self):
+        self.nts = 0
+        self.ets = numpy.empty(0,dtype='float32',order='F')
+        self.mts = numpy.empty((2,0),dtype='float32',order='F')       
+    # collect time series for steps
+    def collect(self, steps=1):
+        MC.data.collect(steps)
+        self.nts += MC.data.nts
+        self.ets = numpy.append(self.ets, MC.data.ets)
+        self.mts = numpy.append(self.mts, MC.data.mts, axis=1) # append in fortran order
+    # estimate correlation time
+    def estimate_tau(self, k0=8, NB=32, maxiter=5):
+        self.clear()
+        k = k0
+        self.collect(NB*k)
+        def get_tau():
+            N = self.nts
+            vari = numpy.var(self.ets)
+            if vari == 0.: # if variance vanishes (T=0 FM)
+                return 0.5 # correlation time is assume to 0.5
+            # calculate block averges
+            avgB = numpy.apply_along_axis(numpy.mean,1,self.ets.reshape(NB,k))
+            # estimate total variance
+            var = numpy.var(avgB)/(NB-1)
+            return N*var/vari/2 # return estimated correlation time
+        tau = get_tau()
+        while tau > 0.1*k:
+            self.collect(NB*k)
+            k *= 2
+            new_tau = get_tau()
+            if new_tau < 1.2*tau:
+                return max(new_tau,tau)
+            maxiter -= 1
+            if maxiter < 0:
+                warnings.warn('Maximum iterations has exhausted, but still not able to determine the correlation time. The system may be critical. An underestimate of the correlation time is returned.')
+                return max(new_tau,tau)
+            tau = new_tau
+        return tau    
 # Inheritant class: LatticeModel - construct model from Lattice and Group
 # LatticeModel has two more attributes: lattice and group
 class LatticeModel(Model):

@@ -41,21 +41,11 @@ python module MC ! in
         end module core
         module data ! in :MC:MC.f90
             use core
-            integer :: nspin
-            integer, allocatable,dimension(:) :: monitor
-            real :: energy1
-            real :: energy2
-            real, allocatable, dimension(:) :: magnet1
-            real, allocatable, dimension(:,:) :: magnet2
-            real, allocatable, dimension(:,:) :: spins
-            integer :: nser
-            real, allocatable, dimension(:) :: eser
-            real, allocatable, dimension(:,:) :: mser
-            subroutine measure(steps) ! in :MC:MC.f90:data
-                integer intent(in) :: steps
-            end subroutine measure
+            integer :: nts
+            real, allocatable, dimension(:) :: ets
+            real, allocatable, dimension(:,:) :: mts
             subroutine collect(steps) ! in :MC:MC.f90:data
-                integer intent(in) :: steps
+                integer, intent(in) :: steps
             end subroutine collect
         end module data
     end interface 

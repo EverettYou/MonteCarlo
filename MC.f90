@@ -4,9 +4,9 @@
 ! 2. remove private variables and procedures in MC.pyf
 ! 3. build extension by:
 !    f2py -c MC.pyf MC.f90 --opt='-O3' --build-dir build
-! +-----------------------------------+
-! |   Fortran core for Monte Carlo    |
-! +-----------------------------------+
+! +-----------------------+
+! |   Processor (Core)    |
+! +-----------------------+
 MODULE CORE
     USE IEEE_ARITHMETIC
     IMPLICIT NONE
@@ -262,108 +262,30 @@ CONTAINS
         CLOSE(99)
     END SUBROUTINE LOAD
 END MODULE CORE
-! Measurement module
+! +---------------+
+! |   Database    |
+! +---------------+
 MODULE DATA
     USE CORE
     IMPLICIT NONE
-    ! data variables
-    INTEGER :: NSPIN ! number of spins to monitor
-    INTEGER, ALLOCATABLE :: MONITOR(:) ! sites for monitoring
-    REAL :: ENERGY1, ENERGY2
-    REAL, ALLOCATABLE :: MAGNET1(:), MAGNET2(:,:) ! (DOF, DOF)
-    REAL, ALLOCATABLE :: SPINS(:,:) ! (DOF, NSPIN)
     ! time series
-    INTEGER :: NTS ! length of the time series
+    INTEGER :: NTS = 0 ! length of the time series
     REAL, ALLOCATABLE :: ETS(:)    ! energy density series
     REAL, ALLOCATABLE :: MTS(:,:) ! magnetization density series
 CONTAINS
-    ! measure energy and spin data over steps
-    SUBROUTINE MEASURE(STEPS)
-        INTEGER, INTENT(IN) :: STEPS
-        INTEGER :: STEP, I, J
-        REAL :: ENERGY, MAGNET(DOF)
-        
-        ! launch measurement environment
-        ! magnetization 1st moment (vector)
-        IF (ALLOCATED(MAGNET1)) THEN
-            IF (ANY(SHAPE(MAGNET1) /= [DOF])) THEN
-                DEALLOCATE(MAGNET1)
-                ALLOCATE(MAGNET1(DOF))
-            END IF
-        ELSE
-            ALLOCATE(MAGNET1(DOF))
-        END IF
-        ! magnetization 2nd moment (matrix)
-        IF (ALLOCATED(MAGNET2)) THEN
-            IF (ANY(SHAPE(MAGNET2) /= [DOF, DOF])) THEN
-                DEALLOCATE(MAGNET2)
-                ALLOCATE(MAGNET2(DOF, DOF))
-            END IF
-        ELSE
-            ALLOCATE(MAGNET2(DOF, DOF))
-        END IF
-        ! spin 1st moment (array of vectors)
-        ! all higher order moments are the same as 1st moment
-        IF (ALLOCATED(SPINS)) THEN
-            IF (ANY(SHAPE(SPINS) /= [DOF, NSPIN])) THEN
-                DEALLOCATE(SPINS)
-                ALLOCATE(SPINS(DOF, NSPIN))
-            END IF
-        ELSE
-            ALLOCATE(SPINS(DOF, NSPIN))
-        END IF
-        ! get energy and hist ready
-        CALL GET_ACTION()
-        CALL GET_HIST()
-        ! clear data pool
-        ENERGY1 = 0.
-        ENERGY2 = 0.
-        MAGNET1 = 0.
-        MAGNET2 = 0.
-        SPINS = 0.
-        ! run MC with updates, and collect data
-        DO STEP = 1, STEPS
-            CALL RANDOM_NUMBER(RND) ! prepare RND
-            CALL SAMPLE1(1, NA)
-            CALL SAMPLE1(NA+1, NA+NB)
-            ! energy measurement
-            ENERGY = ACTION/BETA/NSITE
-            ENERGY1 = ENERGY1 + ENERGY
-            ENERGY2 = ENERGY2 + ENERGY**2
-            ! magnetization measurement
-            MAGNET = REAL(HIST)/NBLK
-            MAGNET1 = MAGNET1 + MAGNET
-            FORALL (I = 1:DOF, J = 1:DOF)
-                MAGNET2(I, J) = MAGNET2(I, J) + MAGNET(I)*MAGNET(J)
-            END FORALL
-            ! spin measurement
-            FORALL (I = 1:NSPIN)
-                SPINS(CONFIG(MONITOR(I)), I) = SPINS(CONFIG(MONITOR(I)), I) + 1.
-            END FORALL
-        END DO
-        ! normalized by STEPS
-        ENERGY1 = ENERGY1/STEPS
-        ENERGY2 = ENERGY2/STEPS
-        MAGNET1 = MAGNET1/STEPS
-        MAGNET2 = MAGNET2/STEPS
-        SPINS = SPINS/STEPS
-    END SUBROUTINE MEASURE
     ! collect time series
     SUBROUTINE COLLECT(STEPS)
         INTEGER, INTENT(IN) :: STEPS
         INTEGER :: T
-        NTS = STEPS
-        ! reallocation for ETS, MTS
-        IF (ALLOCATED(ETS).OR.ALLOCATED(MTS)) THEN
-            IF (ANY(SHAPE(ETS) /= [NTS]) .OR. &
-                ANY(SHAPE(MTS) /= [DOF,NTS])) THEN
-                IF (ALLOCATED(ETS)) DEALLOCATE(ETS)
-                IF (ALLOCATED(MTS)) DEALLOCATE(MTS)
-                ALLOCATE(ETS(NTS), MTS(DOF, NTS))
-            END IF
-        ELSE
-            ALLOCATE(ETS(NTS), MTS(DOF, NTS))
+        ! allocation
+        IF (STEPS /= NTS) THEN ! if length not match
+            ! deallocate everything
+            IF (ALLOCATED(ETS)) DEALLOCATE(ETS)
+            IF (ALLOCATED(MTS)) DEALLOCATE(MTS)
+            NTS = STEPS ! set length of time series
         END IF
+        IF (.NOT.ALLOCATED(ETS)) ALLOCATE(ETS(NTS))
+        IF (.NOT.ALLOCATED(MTS)) ALLOCATE(MTS(DOF, NTS))
         ! get energy and hist ready
         CALL GET_ACTION()
         CALL GET_HIST()
