@@ -24,9 +24,8 @@ python module MC ! in
             subroutine seed(s) ! in :MC:MC.f90:core
             	integer, intent(in) :: s
             end subroutine seed
-            subroutine run(steps,mode) ! in :MC:MC.f90:core
+            subroutine run(steps) ! in :MC:MC.f90:core
                 integer, intent(in) :: steps
-                integer, intent(in) :: mode
             end subroutine run
             subroutine set_beta(new_beta) ! in :MC:MC.f90:core
             	real, intent(in) :: new_beta
@@ -46,12 +45,18 @@ python module MC ! in
             integer, allocatable,dimension(:) :: monitor
             real :: energy1
             real :: energy2
-            real, allocatable,dimension(:) :: magnet1
-            real, allocatable,dimension(:,:) :: magnet2
-            real, allocatable,dimension(:,:) :: spins
+            real, allocatable, dimension(:) :: magnet1
+            real, allocatable, dimension(:,:) :: magnet2
+            real, allocatable, dimension(:,:) :: spins
+            integer :: nser
+            real, allocatable, dimension(:) :: eser
+            real, allocatable, dimension(:,:) :: mser
             subroutine measure(steps) ! in :MC:MC.f90:data
                 integer intent(in) :: steps
             end subroutine measure
+            subroutine collect(steps) ! in :MC:MC.f90:data
+                integer intent(in) :: steps
+            end subroutine collect
         end module data
     end interface 
 end python module MC
