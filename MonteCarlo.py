@@ -300,12 +300,8 @@ class Model(object):
             else:
                 return MC.core.config-1 # shift back to python index convesion
         elif attrname == 'action':
-            if numpy.isnan(MC.core.action):
-                MC.core.get_action()
             return numpy.asscalar(MC.core.action)
         elif attrname == 'hist':
-            if MC.core.hist[0] < 0:
-                MC.core.get_hist()
             return MC.core.hist
         elif attrname == 'beta':
             return numpy.asscalar(MC.core.beta)
@@ -330,14 +326,14 @@ class Model(object):
             else:
                 raise ValueError('Illigal value %s for config.'%repr(attrval))
         elif attrname == 'action':
-            if attrval in {'unknown', 'nan'}:
-                MC.core.action = numpy.nan
+            if attrval in {'unknown'}:
+                MC.core.get_action()
             else:
                 MC.core.action = attrval
         elif attrname == 'hist':
             if attrval in {'unknown'}:
                 MC.core.hist = numpy.empty(self.dof)
-                MC.core.hist[0] = -1
+                MC.core.get_hist()
             else:
                 MC.core.hist = attrval
         elif attrname == 'beta':
@@ -347,19 +343,20 @@ class Model(object):
                 MC.core.set_beta(attrval)
         elif attrname in Model.system_parameters:
             setattr(MC.core, attrname, attrval)
-        elif attrname in {'state', 'system'}:
+        elif attrname == 'state':
+            # order matters! config must be set before beta, action and hist
+            # otherwise call to get_action(), get_hist() will bus error
+            for key in ('config','beta','action','hist'):
+                if key in attrval:
+                    setattr(self, key, attrval[key])
+        elif attrname == 'system':
             for key in attrval:
                 setattr(self, key, attrval[key])
         else:
             self.__dict__[attrname] = attrval
     # run MC for steps, under mode 0 or 1
-    def run(self, steps=1, mode=0):
-        if mode==0: # MC without update physical observibles
-            MC.core.run(steps, 0)
-        elif mode==1: # MC with physical observibles updated
-            MC.core.run(steps, 1)
-        else: # unrecognised mode
-            raise ValueError('The mode %s of Model.run should be 0 or 1.'%repr(mode))
+    def run(self, steps=1):
+        MC.core.run(steps)
         return self
     # take measurement for steps, monitoring specified spins
     def measure(self, steps=1, monitor=None):
