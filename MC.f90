@@ -274,9 +274,9 @@ MODULE DATA
     REAL, ALLOCATABLE :: MTS(:,:) ! magnetization density series
 CONTAINS
     ! collect time series
-    SUBROUTINE COLLECT(STEPS)
-        INTEGER, INTENT(IN) :: STEPS
-        INTEGER :: T
+    SUBROUTINE COLLECT(STEPS, STEPSIZE)
+        INTEGER, INTENT(IN) :: STEPS, STEPSIZE
+        INTEGER :: T, K
         ! allocation
         IF (STEPS /= NTS) THEN ! if length not match
             ! deallocate everything
@@ -290,13 +290,37 @@ CONTAINS
         CALL GET_ACTION()
         CALL GET_HIST()
         ! start collect time series
-        DO T = 1, NTS
-            CALL RANDOM_NUMBER(RND) ! prepare RND
-            CALL SAMPLE1(1, NA)
-            CALL SAMPLE1(NA+1, NA+NB)
-            ETS(T) = ACTION/BETA/NSITE
-            MTS(:,T) = REAL(HIST)/NBLK
-        END DO
+        IF (STEPSIZE == 1) THEN
+            DO T = 1, NTS
+                CALL RANDOM_NUMBER(RND)
+                CALL SAMPLE1(1, NA)
+                CALL SAMPLE1(NA+1, NA+NB)
+                ETS(T) = ACTION/BETA/NSITE
+                MTS(:,T) = REAL(HIST)/NBLK
+            END DO
+        ELSEIF (STEPSIZE < 10) THEN
+            DO T = 1, NTS
+                DO K = 1, STEPSIZE
+                    CALL RANDOM_NUMBER(RND)
+                    CALL SAMPLE1(1, NA)
+                    CALL SAMPLE1(NA+1, NA+NB)
+                END DO
+                ETS(T) = ACTION/BETA/NSITE
+                MTS(:,T) = REAL(HIST)/NBLK
+            END DO
+        ELSE
+            DO T = 1, NTS
+                DO K = 1, STEPSIZE
+                    CALL RANDOM_NUMBER(RND)
+                    CALL SAMPLE0(1, NA)
+                    CALL SAMPLE0(NA+1, NA+NB)
+                END DO
+                CALL GET_ACTION()
+                CALL GET_HIST()
+                ETS(T) = ACTION/BETA/NSITE
+                MTS(:,T) = REAL(HIST)/NBLK
+            END DO
+        END IF        
     END SUBROUTINE COLLECT
 END MODULE DATA
 

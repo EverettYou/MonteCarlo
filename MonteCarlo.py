@@ -2,6 +2,7 @@ import itertools
 import operator
 import math
 import numpy
+from scipy.optimize import curve_fit
 import warnings
 ''' ----- Permutation Group System ----- 
 attributes: n, elements, order, index, chi'''
@@ -281,20 +282,12 @@ class Model(object):
     system_parameters = ('dof','nsite','na','nb','nc','nlst','chi','irng','jlst','klst')
     # Model constructor given system parameter
     # system must be a dict containing keys specified in Model._system_parameters
-    def __init__(self, system, state={}):
-        # passing system parameters to MC.core
+    def __init__(self, system, state={'action':'unknown','beta':'default','config':'FM','hist':'unknown'}):
         if not all(key in system for key in Model.system_parameters):
             raise ValueError('The dictionary %s passed in as system does not contains all the keys required in %s.'%(repr(system), repr(Model.system_parameters)))
-        self.system = system
-        # kernel initialization
+        self.system = system # set system
         MC.core.init() # private workspace allocated
-        # initialize state parameters
-        if state == {}:
-            self.state = {'action':'unknown','beta':'default','config':'FM','hist':'unknown'}
-        else:
-            self.state = state
-        # initialize database
-        self.clear()
+        self.state = state # set state
     def __getattr__(self, attrname):
         if attrname == 'config':
             if MC.core.config is None:
@@ -310,7 +303,7 @@ class Model(object):
         elif attrname in Model.system_parameters:
             return getattr(MC.core, attrname)
         elif attrname == 'state':
-            return {key:getattr(self,key) for key in ('action','beta','config','hist')}
+            return {key:getattr(self,key) for key in ('config','beta','action','hist')}
         elif attrname == 'system':
             return {key:getattr(self,key) for key in Model.system_parameters}
         else:
@@ -359,46 +352,85 @@ class Model(object):
     # run MC for steps
     def run(self, steps=1):
         MC.core.run(steps)
-        return self
-    # clear data
-    def clear(self):
-        self.nts = 0
-        self.ets = numpy.empty(0,dtype='float32',order='F')
-        self.mts = numpy.empty((2,0),dtype='float32',order='F')       
+        return self     
     # collect time series for steps
-    def collect(self, steps=1):
-        MC.data.collect(steps)
-        self.nts += MC.data.nts
-        self.ets = numpy.append(self.ets, MC.data.ets)
-        self.mts = numpy.append(self.mts, MC.data.mts, axis=1) # append in fortran order
+    def collect(self,steps=1,stepsize=1,ets=None,mts=None):
+        if ets is None:
+            ets = numpy.empty(shape=(0,),dtype=numpy.float32,order='F')
+        if mts is None:
+            mts = numpy.empty(shape=(2,0),dtype=numpy.float32,order='F')
+        MC.data.collect(steps,stepsize)
+        ets = numpy.append(ets,MC.data.ets)
+        mts = numpy.append(mts,MC.data.mts,axis=1)
+        return ets, mts
     # estimate correlation time
-    def estimate_tau(self, k0=8, NB=32, maxiter=5):
-        self.clear()
-        k = k0
-        self.collect(NB*k)
-        def get_tau():
-            N = self.nts
-            vari = numpy.var(self.ets)
-            if vari == 0.: # if variance vanishes (T=0 FM)
-                return 0.5 # correlation time is assume to 0.5
-            # calculate block averges
-            avgB = numpy.apply_along_axis(numpy.mean,1,self.ets.reshape(NB,k))
-            # estimate total variance
-            var = numpy.var(avgB)/(NB-1)
-            return N*var/vari/2 # return estimated correlation time
-        tau = get_tau()
-        while tau > 0.1*k:
-            self.collect(NB*k)
-            k *= 2
-            new_tau = get_tau()
-            if new_tau < 1.2*tau:
-                return max(new_tau,tau)
-            maxiter -= 1
-            if maxiter < 0:
-                warnings.warn('Maximum iterations has exhausted, but still not able to determine the correlation time. The system may be critical. An underestimate of the correlation time is returned.')
-                return max(new_tau,tau)
-            tau = new_tau
-        return tau    
+    def estimate_tau(self, k0=8, NB=16, maxiter=7):
+        # k0: minimal bin size, NB: maximal bin number
+        # maxiter: maximal iteration, each iteration double the data
+        # put new ets data into bindata
+        def put_bindata(ets_new):
+            # get k0-bin average from ets_new
+            N_new = len(ets_new)
+            bin = [blk.mean() for blk in numpy.split(ets_new,N_new//k0)]
+            try:
+                bindata[k0].extend(bin)
+            except:
+                bindata[k0] = bin
+            k = 2*k0 # starting from 2*k0
+            while k <= N//NB: # to k=N//NB
+                # now construct bin average for doubled k
+                ibin = iter(bin)
+                bin = [(x1+x2)/2 for x1,x2 in zip(ibin,ibin)]               
+                try: # if bindata exist, directly extend new data
+                    bindata[k].extend(bin)
+                except: # if data not existed
+                    # first construct from previous k and extend
+                    bin_last = bindata[k//2]
+                    ibin = iter(bin_last[:len(bin_last)//2])
+                    bindata[k] = [(x1+x2)/2 for x1,x2 in zip(ibin,ibin)]+bin
+                k *= 2 # k doubled
+        # fitting function
+        def func(x, tau, xi):
+            return tau/(1+xi/x)
+        # estimate 2*tau based on the bindata
+        def get_tau2():
+            if len(bindata) < 3: # insurficient data, just caulcate the last layer
+                k = N//NB
+                return k*numpy.var(bindata[k],ddof=1)/vari
+            else: # surficient data enables fitting
+                tau2lst = [(k,k*numpy.var(bin,ddof=1)/vari) for k, bin in bindata.items()]
+                ks, tau2s = tuple(zip(*tau2lst))
+                pv, pc = curve_fit(func, ks, tau2s)
+                return pv[0], pv[1]
+        # launch
+        ets, mts = self.collect(k0*NB)
+        N = len(ets)
+        vari = ets.var(ddof=1)
+        if vari == 0.: # vanishing vari => FM phase
+            tau2 = 0. # set 2*tau directly
+        else: # really need to calculate tau from binning
+            bindata = {} # prepare an empty dict for bin data
+            put_bindata(MC.data.ets) # put bin data from new ets
+            tau2 = k0*numpy.var(bindata[k0])/vari # calculate 2*tau for k0-bin
+            if tau2 > 0.1*k0: # if 2*tau large, need adaptive enlarge
+                for it in range(maxiter):
+                    # double the amount of data
+                    ets, mts = self.collect(N, ets=ets, mts=mts)
+                    N = len(ets)
+                    vari = ets.var(ddof=1)
+                    put_bindata(MC.data.ets)
+                    if len(bindata) < 3:
+                        tau2_new = get_tau2()
+                        if tau2_new < 1.2*tau2:
+                            tau = max(tau2_new,tau2)
+                            break
+                    else:
+                        tau2, xi = get_tau2()
+                        if N//NB > 5*xi:
+                            break
+                else:
+                    warnings.warn('Max iteration exhausted, not found correlation time yet. Underestimation was returned.')
+        return tau2, ets, mts
 # Inheritant class: LatticeModel - construct model from Lattice and Group
 # LatticeModel has two more attributes: lattice and group
 class LatticeModel(Model):

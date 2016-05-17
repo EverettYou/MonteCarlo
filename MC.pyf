@@ -44,8 +44,9 @@ python module MC ! in
             integer :: nts
             real, allocatable, dimension(:) :: ets
             real, allocatable, dimension(:,:) :: mts
-            subroutine collect(steps) ! in :MC:MC.f90:data
+            subroutine collect(steps, stepsize) ! in :MC:MC.f90:data
                 integer, intent(in) :: steps
+                integer, intent(in) :: stepsize                
             end subroutine collect
         end module data
     end interface 
