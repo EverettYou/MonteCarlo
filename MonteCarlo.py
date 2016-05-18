@@ -314,25 +314,26 @@ class Model(object):
                 MC.core.config = attrval+1 # shift to FORTRAN index convension
             elif isinstance(attrval, (list, tuple)):
                 MC.core.config = numpy.array(attrval,dtype='int32')+1 # shift to FORTRAN index convension
-            elif attrval in {'FM','uniform'}:
-                MC.core.config = numpy.full(self.nsite,1,dtype='int32')
-            elif attrval in {'PM','random'}:
-                MC.core.config = numpy.random.randint(self.dof,size=self.nsite,dtype='int32')+1
+            elif isinstance(attrval,str):
+                if attrval in {'FM','uniform'}:
+                    MC.core.config = numpy.full(self.nsite,1,dtype='int32')
+                elif attrval in {'PM','random'}:
+                    MC.core.config = numpy.random.randint(self.dof,size=self.nsite,dtype='int32')+1
             else:
                 raise ValueError('Illigal value %s for config.'%repr(attrval))
         elif attrname == 'action':
-            if attrval in {'unknown'}:
+            if isinstance(attrval,str) and attrval in {'unknown'}:
                 MC.core.get_action()
             else:
                 MC.core.action = attrval
         elif attrname == 'hist':
-            if attrval in {'unknown'}:
+            if isinstance(attrval,str) and attrval in {'unknown'}:
                 MC.core.hist = numpy.empty(self.dof,dtype='int32')
                 MC.core.get_hist()
             else:
                 MC.core.hist = attrval
         elif attrname == 'beta':
-            if attrval in {'default'}:
+            if isinstance(attrval,str) and attrval in {'default'}:
                 MC.core.beta = 1. # to initialize
             else:
                 MC.core.set_beta(attrval)
@@ -352,7 +353,7 @@ class Model(object):
     # run MC for steps
     def run(self, steps=1):
         MC.core.run(steps)
-        return self     
+        return self
     # collect time series for steps
     def collect(self,steps=1,stepsize=1,ets=None,mts=None):
         if ets is None:
@@ -380,7 +381,7 @@ class Model(object):
             while k <= N//NB: # to k=N//NB
                 # now construct bin average for doubled k
                 ibin = iter(bin)
-                bin = [(x1+x2)/2 for x1,x2 in zip(ibin,ibin)]               
+                bin = [(x1+x2)/2 for x1,x2 in zip(ibin,ibin)]
                 try: # if bindata exist, directly extend new data
                     bindata[k].extend(bin)
                 except: # if data not existed
@@ -443,3 +444,84 @@ class LatticeModel(Model):
         system = {name:para[name] for name in Model.system_parameters}
         # call Model method to initialize
         super().__init__(system)
+''' ----- Platform System -----
+attributes: model'''
+class Platform(object):
+    # construct a Platform from Model
+    def __init__(self, model):
+        self.model = model
+        self.collections = []
+    # add a collection at given beta
+    def thermalize(self, beta):
+        self.model.beta = beta # set beta
+        # get relaxation time
+        tau2, ets, mts = self.model.estimate_tau()
+        stepsize = max(math.ceil(tau2),1)
+        data = {'stepsize':stepsize,
+                'ets':ets[10*stepsize::stepsize],
+                'mts':mts[:,10*stepsize::stepsize]}
+        eavg = ets.mean()
+        evar = ets.var()
+        estd = math.sqrt(evar)
+        collection = {
+            'state':self.model.state,
+            'data':{
+                'stepsize':stepsize,
+                'ets':ets[10*stepsize::stepsize],
+                'mts':mts[:,10*stepsize::stepsize]},
+            'eavg':eavg, # average energy
+            'evar':evar, # energy variance
+            'erng':(eavg-estd, eavg+estd)} # energy range
+        collection['nts'] = len(collection['data']['ets'])
+        self.collections.append(collection)
+        return collection
+    # refine collection data for steps
+    def refine(self, collection, steps):
+        self.model.state = collection['state'] # load state
+        ets, mts = self.model.collect(steps,**collection['data']) # collect data
+        collection['state'] = self.model.state
+        # ets and mts has been appended
+        collection['data']['ets'] = ets
+        collection['data']['mts'] = mts
+        # statistics
+        eavg = ets.mean()
+        evar = ets.var()
+        estd = math.sqrt(evar)
+        collection['nts'] = len(ets)
+        collection['eavg'] = eavg
+        collection['evar'] = evar
+        collection['erng'] = (eavg-estd, eavg+estd)
+        return collection
+    # build temperature list
+    def tempering(self, beta_low, beta_high, min_evar=0.00001):
+        # thermalize a middle beta collection if necessary
+        def binary_tempering(cold, hot):
+            if cold['erng'][1] < hot['erng'][0]: # energy range overlaps
+                # refine the temperature list
+                beta_mid = (cold['state']['beta'] + hot['state']['beta'])/2
+                # borrow state from cold side
+                self.model.state = cold['state']
+                mild = self.thermalize(beta_mid)
+                binary_tempering(cold, mild)
+                binary_tempering(mild, hot)
+        # thermalize coldest and hotest collections (cold first)
+        coldest = self.thermalize(beta_high)
+        hotest = self.thermalize(beta_low)
+        binary_tempering(coldest, hotest) 
+        # a prelimiary temperature list established
+        # refine the temperature list
+        evar = max(collection['evar']/collection['nts']
+                   for collection in self.collections)
+        # progressively decrease evar to avoid inaccurate evar affecting the result
+        while evar > min_evar:
+            evar /= 2
+            for collection in self.collections:
+                nneed = int(collection['evar']/evar)
+                steps = max(nneed-collection['nts'],0)
+                self.refine(collection, steps)
+        return self
+# I/O tools
+import jsonpickle
+def export(filename, obj):
+    with open('data/' + filename + '.json', 'w') as outfile:
+        outfile.write(jsonpickle.encode(obj))
