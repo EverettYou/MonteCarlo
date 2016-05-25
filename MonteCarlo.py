@@ -364,6 +364,37 @@ class Model(object):
         ets = numpy.append(ets,MC.data.ets)
         mts = numpy.append(mts,MC.data.mts,axis=1)
         return ets, mts
+# Inheritant class: LatticeModel - construct model from Lattice and Group
+# LatticeModel has two more attributes: lattice and group
+class LatticeModel(Model):
+    def __init__(self, lattice=Lattice(), group=Group(1)):
+        # save lattice and group as attribute
+        self.lattice = lattice
+        self.group = group
+        # construct system parameters
+        para = {**vars(lattice),**vars(group)}
+        system = {name:para[name] for name in Model.system_parameters}
+        # call Model method to initialize
+        super().__init__(system)
+''' ----- Collection -----
+attributes: model'''
+class Collection(object):
+    def __init__(self, model, **karg):
+        self.model = model # reference to model
+        for k, v in karg.items():
+            setattr(self,k,v)
+    # thermalize a model at beta
+    def thermalize(self, beta):
+        self.model.beta = beta # set beta
+        # get relaxation time
+        tau2, ets, mts = self.estimate_tau()
+        # keep model state for future restart
+        self.state = self.model.state
+        self.beta = self.model.beta
+        stepsize = max(math.ceil(tau2),1)
+        self.stepsize = stepsize
+        self.update(ets[10*stepsize::stepsize],mts[:,10*stepsize::stepsize])
+        return self
     # estimate correlation time
     def estimate_tau(self, k0=8, NB=16, maxiter=7):
         # k0: minimal bin size, NB: maximal bin number
@@ -390,11 +421,11 @@ class Model(object):
                     ibin = iter(bin_last[:len(bin_last)//2])
                     bindata[k] = [(x1+x2)/2 for x1,x2 in zip(ibin,ibin)]+bin
                 k *= 2 # k doubled
-        # fitting function
-        def func(x, tau, xi):
-            return tau/(1+xi/x)
         # estimate 2*tau based on the bindata
         def get_tau2():
+            # fitting function
+            def func(x, tau, xi):
+                return tau/(1+xi/x)
             if len(bindata) < 3: # insurficient data, just caulcate the last layer
                 k = N//NB
                 return k*numpy.var(bindata[k],ddof=1)/vari
@@ -404,7 +435,7 @@ class Model(object):
                 pv, pc = curve_fit(func, ks, tau2s)
                 return pv[0], pv[1]
         # launch
-        ets, mts = self.collect(k0*NB)
+        ets, mts = self.model.collect(k0*NB)
         N = len(ets)
         vari = ets.var(ddof=1)
         if vari == 0.: # vanishing vari => FM phase
@@ -416,7 +447,7 @@ class Model(object):
             if tau2 > 0.1*k0: # if 2*tau large, need adaptive enlarge
                 for it in range(maxiter):
                     # double the amount of data
-                    ets, mts = self.collect(N, ets=ets, mts=mts)
+                    ets, mts = self.model.collect(N, ets=ets, mts=mts)
                     N = len(ets)
                     vari = ets.var(ddof=1)
                     put_bindata(MC.data.ets)
@@ -432,93 +463,166 @@ class Model(object):
                 else:
                     warnings.warn('Max iteration exhausted, not found correlation time yet. Underestimation was returned.')
         return tau2, ets, mts
-# Inheritant class: LatticeModel - construct model from Lattice and Group
-# LatticeModel has two more attributes: lattice and group
-class LatticeModel(Model):
-    def __init__(self, lattice=Lattice(), group=Group(1)):
-        # save lattice and group as attribute
-        self.lattice = lattice
-        self.group = group
-        # construct system parameters
-        para = {**vars(lattice),**vars(group)}
-        system = {name:para[name] for name in Model.system_parameters}
-        # call Model method to initialize
-        super().__init__(system)
-''' ----- Platform System -----
+    # append time series to collection
+    def update(self, ets, mts):
+        self.ets = ets
+        self.mts = mts
+        eavg = self.ets.mean()
+        evar = self.ets.var()
+        estd = math.sqrt(evar)
+        self.eavg = eavg
+        self.evar = evar
+        self.erng = (eavg-estd, eavg+estd)
+        self.nts = len(self.ets)
+        return self
+    # refine collection data for steps
+    def refine(self, steps):
+        self.model.state = self.state # load state
+        # collect time series data and update
+        self.update(*self.model.collect(steps,self.stepsize,self.ets,self.mts))
+        self.state = self.model.state # save state
+        return self
+    # action difference, return mean and var
+    def action_diff(self, beta, NB=32):
+        # actions diff for each sample
+        actions = (beta-self.beta)*self.model.nsite*self.ets
+        smin = actions.min() # get minimal action
+        actions = actions - smin # regularize by minimal action
+        # such that actions are positive, to avoid overflow
+        # action diff for each block
+        avgs = [smin - math.log(block.mean()) for block in numpy.array_split(numpy.exp(-actions),NB)]
+        return numpy.mean(avgs), numpy.var(avgs,ddof=1)/NB
+    # reweight function f(ets,mts) to beta, return mean and var
+    def reweight(self, beta, f, NB=32):
+        # actions diff for each sample
+        actions = (beta-self.beta)*self.model.nsite*self.ets
+        smin = actions.min() # get minimal action
+        actions = actions - smin # regularize by minimal action
+        # such that actions are positive, to avoid overflow
+        weights = numpy.exp(-actions)
+        avgs = [numpy.mean(fs*ws)/numpy.mean(ws) for ws, fs in
+                zip(numpy.array_split(weights,NB),
+                numpy.array_split(f(self.ets,self.mts),NB))]
+        return numpy.mean(avgs), numpy.var(avgs,ddof=1)/NB, weights.sum()
+    # return data dictionary
+    def data(self):
+        dat = self.__dict__
+        return {k:dat[k] for k in dat.keys() if k is not 'model'}
+''' ----- Platform -----
 attributes: model'''
+import pickle
 class Platform(object):
     # construct a Platform from Model
-    def __init__(self, model):
-        self.model = model
+    def __init__(self, model=None):
+        self.model = model # reference to model
         self.collections = []
     # add a collection at given beta
-    def thermalize(self, beta):
-        self.model.beta = beta # set beta
-        # get relaxation time
-        tau2, ets, mts = self.model.estimate_tau()
-        stepsize = max(math.ceil(tau2),1)
-        data = {'stepsize':stepsize,
-                'ets':ets[10*stepsize::stepsize],
-                'mts':mts[:,10*stepsize::stepsize]}
-        eavg = ets.mean()
-        evar = ets.var()
-        estd = math.sqrt(evar)
-        collection = {
-            'state':self.model.state,
-            'data':{
-                'stepsize':stepsize,
-                'ets':ets[10*stepsize::stepsize],
-                'mts':mts[:,10*stepsize::stepsize]},
-            'eavg':eavg, # average energy
-            'evar':evar, # energy variance
-            'erng':(eavg-estd, eavg+estd)} # energy range
-        collection['nts'] = len(collection['data']['ets'])
+    def add(self, beta):
+        collection = Collection(self.model).thermalize(beta)
         self.collections.append(collection)
         return collection
-    # refine collection data for steps
-    def refine(self, collection, steps):
-        self.model.state = collection['state'] # load state
-        ets, mts = self.model.collect(steps,**collection['data']) # collect data
-        collection['state'] = self.model.state
-        # ets and mts has been appended
-        collection['data']['ets'] = ets
-        collection['data']['mts'] = mts
-        # statistics
-        eavg = ets.mean()
-        evar = ets.var()
-        estd = math.sqrt(evar)
-        collection['nts'] = len(ets)
-        collection['eavg'] = eavg
-        collection['evar'] = evar
-        collection['erng'] = (eavg-estd, eavg+estd)
-        return collection
     # build temperature list
-    def tempering(self, beta_low, beta_high, min_evar=0.00001):
+    def tempering(self, beta_low, beta_high):
         # thermalize a middle beta collection if necessary
         def binary_tempering(cold, hot):
-            if cold['erng'][1] < hot['erng'][0]: # energy range overlaps
+            if cold.erng[1] < hot.erng[0]: # energy range overlaps
                 # refine the temperature list
-                beta_mid = (cold['state']['beta'] + hot['state']['beta'])/2
+                beta_mid = (cold.beta + hot.beta)/2
                 # borrow state from cold side
-                self.model.state = cold['state']
-                mild = self.thermalize(beta_mid)
+                self.model.state = cold.state
+                mild = self.add(beta_mid)
                 binary_tempering(cold, mild)
                 binary_tempering(mild, hot)
         # thermalize coldest and hotest collections (cold first)
-        coldest = self.thermalize(beta_high)
-        hotest = self.thermalize(beta_low)
-        binary_tempering(coldest, hotest) 
+        coldest = self.add(beta_high)
+        hotest = self.add(beta_low)
+        binary_tempering(coldest, hotest)
+        # sort the collections by beta
+        self.collections.sort(key=operator.attrgetter('beta'))
         # a prelimiary temperature list established
         # refine the temperature list
-        evar = max(collection['evar']/collection['nts']
+        self.refine() # to the default level of variance
+        return self
+    # refine collections to reach the expected energy variance
+    def refine(self, min_evar=0.00001):
+        # estimate the max variance of current data 
+        evar = max(collection.evar/collection.nts
                    for collection in self.collections)
         # progressively decrease evar to avoid inaccurate evar affecting the result
         while evar > min_evar:
             evar /= 2
             for collection in self.collections:
-                nneed = int(collection['evar']/evar)
-                steps = max(nneed-collection['nts'],0)
-                self.refine(collection, steps)
+                nneed = int(collection.evar/evar)
+                steps = max(nneed-collection.nts,0)
+                collection.refine(steps)
+        return self
+    # return self-consistent actions 
+    def actions(self):
+        Y = []
+        W = []
+        for collection0 in self.collections:
+            beta0 = collection0.beta # get beta
+            y = 0.
+            w = []
+            for collection1 in self.collections:
+                # S0 = S1 + dS subject to Svar variance
+                dS, Svar = collection1.action_diff(beta0)
+                if collection0 is collection1:
+                    w.append(0.) # Svar=0, pseodu inverse
+                else: # different collections
+                    w.append(1/Svar) # 1/Svar as weight
+                    y += dS/Svar # add up weighted dS
+            w = numpy.array(w)
+            Y.append(y/w.sum()) # normalized dS
+            W.append(w/w.sum()) # normalized weight
+        # convert list to numpy array
+        W = numpy.array(W)
+        Y = numpy.array(Y)
+        # S = inv(1-W).Y where the inverse is pseudo 
+        S = numpy.dot(numpy.linalg.pinv(numpy.eye(len(Y))-W),Y)
+        return S
+    # return expectation value of f(ets,mts) at beta
+    def expect(self, beta, f):
+        # select base collection by beta
+        if beta < self.collections[0].beta: # below min beta
+            a, v, w = self.collections[0].reweight(beta,f)
+        elif beta > self.collections[-1].beta: # above max beta
+            a, v, w = self.collections[-1].reweight(beta,f)
+        else: # perform a beta search
+            l = 0
+            h = len(self.collections)-1
+            # start binary search
+            while l < h-1:
+                m = (l+h)//2 # set mid point
+                if beta <= self.collections[m].beta:
+                    h = m
+                else:
+                    l = m
+            # now beta is in between collections[l] and [h]
+            al, vl, wl = self.collections[l].reweight(beta,f)
+            ah, vh, wh = self.collections[h].reweight(beta,f)
+            # weight normalization
+            w = wl + wh
+            wl = wl/w
+            wh = wh/w
+            # calculate averge and variance
+            a = al*wl + ah*wh
+            v = vl*wl**2 + vh*wh**2
+        return numpy.asscalar(a), numpy.asscalar(v)
+    # save platform
+    def save(self, filename):
+        data = {}
+        data['system'] = self.model.system
+        data['collections'] = [collection.data() for collection in self.collections]
+        with open('data/' + filename + '.dat', 'bw') as file:
+            pickle.dump(data, file)
+    # load platform 
+    def load(self, filename):
+        with open('data/' + filename + '.dat', 'br') as file:
+            data = pickle.load(file)
+        # setup model system
+        self.model = Model(data['system'])
+        self.collections = [Collection(self.model,**karg) for karg in data['collections']]
         return self
 # I/O tools
 import jsonpickle
